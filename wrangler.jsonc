@@ -1,0 +1,24 @@
+{
+  "name": "scry-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-10",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "<your-kv-namespace-id>",
+      "preview_id": "<your-preview-kv-namespace-id>"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_OBJECT",
+        "class_name": "ScryMCP"
+      }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_classes": ["ScryMCP"] }
+  ]
+}
