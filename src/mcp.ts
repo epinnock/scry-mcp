@@ -69,48 +69,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   /**
-   * Extract the R2 object key from a screenshot_url.
-   * Handles both full URLs (B2/R2) and bare paths.
-   */
-  private extractImagePath(screenshotUrl: string): string {
-    try {
-      const url = new URL(screenshotUrl);
-      let imagePath = url.pathname.replace(/^\//, "");
-      // B2 format: /file/<bucket>/path → strip "file/<bucket>/"
-      imagePath = imagePath.replace(/^file\/[^/]+\//, "");
-      return imagePath;
-    } catch {
-      // Not a full URL — treat as a path already
-      return screenshotUrl;
-    }
-  }
-
-  /**
-   * Fetch a screenshot image from the Scry image proxy and return it as base64.
-   * Routes through /api/image/... which handles CDN auth server-side.
-   */
-  private async fetchScreenshot(screenshotUrl: string): Promise<{ base64: string; mimeType: string } | null> {
-    try {
-      const imagePath = this.extractImagePath(screenshotUrl);
-      const proxyUrl = `${this.env.SCRY_SEARCH_API_URL}/api/image/${imagePath}`;
-      const response = await this.fetchWithTimeout(proxyUrl, {
-        headers: {
-          Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
-        },
-      });
-
-      if (!response.ok) return null;
-
-      const buffer = await response.arrayBuffer();
-      const mimeType = response.headers.get("content-type") || "image/png";
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-      return { base64, mimeType };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Get a time-limited presigned URL for a screenshot.
    * Calls POST /api/image/presign on the Scry Next.js API.
    * The returned URL is publicly accessible (no auth required) until it expires.
@@ -190,14 +148,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const formatted = data.results.map((r, i) => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
       if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
-      if (r.json_content) {
-        const jc = r.json_content as Record<string, unknown>;
+      const jc = r.json_content as Record<string, unknown> | undefined;
+      if (jc) {
         if (jc.figma_url) lines.push(`   Figma: ${jc.figma_url}`);
         if (jc.github_url) lines.push(`   GitHub: ${jc.github_url}`);
         if (jc.storybook_url) lines.push(`   Storybook: ${jc.storybook_url}`);
         if (Array.isArray(jc.tags) && jc.tags.length) lines.push(`   Tags: ${jc.tags.join(", ")}`);
       }
-      if (r.screenshot_url) lines.push(`   Screenshot: ${r.screenshot_url}`);
+      // Use screenshot_url if available, otherwise fall back to screenshotR2Url from json_content
+      const screenshotUrl = r.screenshot_url || (jc?.screenshotR2Url as string | undefined);
+      if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
       return lines.join("\n");
     });
@@ -330,25 +290,37 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
         const start = Date.now();
 
-        // Fetch image and presigned URL in parallel
-        const [imageResult, presignResult] = await Promise.all([
-          this.fetchScreenshot(screenshot_url),
-          this.getPresignedUrl(screenshot_url),
-        ]);
+        // Get a presigned R2 URL, then fetch image bytes from it
+        const presignResult = await this.getPresignedUrl(screenshot_url);
 
-        this.log("get_component_screenshot", {
-          hasImage: !!imageResult,
-          hasPresignedUrl: !!presignResult,
-          latencyMs: Date.now() - start,
-        });
-
-        if (!imageResult && !presignResult) {
+        if (!presignResult) {
+          this.log("get_component_screenshot", { hasImage: false, hasPresignedUrl: false, latencyMs: Date.now() - start });
           return this.toolError(
             "SCREENSHOT_FETCH_FAILED",
-            `Could not fetch screenshot or generate presigned URL for: ${screenshot_url}`,
+            `Could not generate presigned URL for: ${screenshot_url}`,
             true,
           );
         }
+
+        // Fetch image bytes from the presigned URL for inline display
+        let imageResult: { base64: string; mimeType: string } | null = null;
+        try {
+          const response = await this.fetchWithTimeout(presignResult.url);
+          if (response.ok) {
+            const buffer = await response.arrayBuffer();
+            const mimeType = response.headers.get("content-type") || "image/png";
+            const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            imageResult = { base64, mimeType };
+          }
+        } catch {
+          // Image fetch failed — still return the presigned URL
+        }
+
+        this.log("get_component_screenshot", {
+          hasImage: !!imageResult,
+          hasPresignedUrl: true,
+          latencyMs: Date.now() - start,
+        });
 
         const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
@@ -366,13 +338,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           });
         }
 
-        // Presigned URL as text fallback (works in all clients — URL is accessible without auth)
-        if (presignResult) {
-          content.push({
-            type: "text",
-            text: `Screenshot URL (expires ${presignResult.expiresAt}): ${presignResult.url}`,
-          });
-        }
+        // Presigned URL as text (works in all clients — URL is accessible without auth)
+        content.push({
+          type: "text",
+          text: `Screenshot URL (expires ${presignResult.expiresAt}): ${presignResult.url}`,
+        });
 
         return { content };
       }
