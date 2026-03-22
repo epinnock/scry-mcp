@@ -256,11 +256,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // --- Register widget resources (MCP Apps UI) ---
     const csp = { resourceDomains: [R2_SCREENSHOT_DOMAIN] };
 
+    const resourceConfig = { _meta: { ui: { csp } } };
+
     registerAppResource(
       this.server,
       "Search Results Widget",
       SEARCH_RESULTS_WIDGET_URI,
-      {},
+      resourceConfig,
       async () => {
         const html = await loadHtml(this.env.ASSETS, "/search-results-widget.html");
         return { contents: [{ uri: SEARCH_RESULTS_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
@@ -271,7 +273,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       this.server,
       "Screenshot Widget",
       SCREENSHOT_WIDGET_URI,
-      {},
+      resourceConfig,
       async () => {
         const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
         return { contents: [{ uri: SCREENSHOT_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
