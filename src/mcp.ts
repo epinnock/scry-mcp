@@ -14,6 +14,9 @@ const SEARCH_RESULTS_WIDGET_URI = "ui://scry/search-results-widget.html";
 const SCREENSHOT_WIDGET_URI = "ui://scry/screenshot-widget.html";
 const WIDGET_MIME_TYPE = "text/html+mcp";
 
+// R2 domain for presigned screenshot URLs — needed for widget CSP
+const R2_SCREENSHOT_DOMAIN = "https://scry-component-snapshot-bucket.f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
+
 export type AuthProps = {
   firebaseUid: string;
   email: string;
@@ -219,7 +222,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       { mimeType: WIDGET_MIME_TYPE },
       async (uri) => {
         const html = await loadHtml(this.env.ASSETS, "/search-results-widget.html");
-        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html }] };
+        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html, _meta: {
+          ui: { csp: { resourceDomains: [R2_SCREENSHOT_DOMAIN] } },
+        } }] };
       }
     );
 
@@ -229,7 +234,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       { mimeType: WIDGET_MIME_TYPE },
       async (uri) => {
         const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
-        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html }] };
+        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html, _meta: {
+          ui: { csp: { resourceDomains: [R2_SCREENSHOT_DOMAIN] } },
+        } }] };
       }
     );
 
