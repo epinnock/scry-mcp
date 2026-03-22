@@ -24,6 +24,17 @@ export type AuthProps = {
   emailVerified: boolean;
 };
 
+/** Convert ArrayBuffer to base64, chunked to avoid call stack overflow on large buffers */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 /** Fetch compiled widget HTML from the ASSETS binding */
 async function loadHtml(assets: Fetcher, path: string): Promise<string> {
   const request = new Request(new URL(path, "https://assets.invalid").toString());
@@ -181,7 +192,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           if (!response.ok) return undefined;
           const buffer = await response.arrayBuffer();
           const mimeType = response.headers.get("content-type") || "image/png";
-          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          const base64 = arrayBufferToBase64(buffer);
           return `data:${mimeType};base64,${base64}`;
         } catch {
           return undefined;
@@ -416,7 +427,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           if (response.ok) {
             const buffer = await response.arrayBuffer();
             const mimeType = response.headers.get("content-type") || "image/png";
-            const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            const base64 = arrayBufferToBase64(buffer);
             imageResult = { base64, mimeType };
           }
         } catch {
