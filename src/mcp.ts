@@ -200,6 +200,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       })
     );
 
+    const dataUriCount = imageDataUris.filter(Boolean).length;
+    const dataUriTotalBytes = imageDataUris.reduce((sum, uri) => sum + (uri?.length || 0), 0);
+    this.log("callSearchAPI", {
+      dataUriCount,
+      dataUriTotalBytes,
+      presignCount: presignResults.filter(Boolean).length,
+    });
+
     // Format results for readability in Claude (text content, backward compat)
     const formatted = data.results.map((r, i) => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
