@@ -1,6 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
@@ -12,7 +13,6 @@ const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10MB max for base64 image in
 // MCP Apps widget resource URIs
 const SEARCH_RESULTS_WIDGET_URI = "ui://scry/search-results-widget.html";
 const SCREENSHOT_WIDGET_URI = "ui://scry/screenshot-widget.html";
-const WIDGET_MIME_TYPE = "text/html+mcp";
 
 // R2 domain for presigned screenshot URLs — needed for widget CSP
 const R2_SCREENSHOT_DOMAIN = "https://scry-component-snapshot-bucket.f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
@@ -216,32 +216,33 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   async init() {
     // --- Register widget resources (MCP Apps UI) ---
-    this.server.registerResource(
-      "search-results-widget",
+    const csp = { resourceDomains: [R2_SCREENSHOT_DOMAIN] };
+
+    registerAppResource(
+      this.server,
+      "Search Results Widget",
       SEARCH_RESULTS_WIDGET_URI,
-      { mimeType: WIDGET_MIME_TYPE },
-      async (uri) => {
+      {},
+      async () => {
         const html = await loadHtml(this.env.ASSETS, "/search-results-widget.html");
-        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html, _meta: {
-          ui: { csp: { resourceDomains: [R2_SCREENSHOT_DOMAIN] } },
-        } }] };
+        return { contents: [{ uri: SEARCH_RESULTS_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
       }
     );
 
-    this.server.registerResource(
-      "screenshot-widget",
+    registerAppResource(
+      this.server,
+      "Screenshot Widget",
       SCREENSHOT_WIDGET_URI,
-      { mimeType: WIDGET_MIME_TYPE },
-      async (uri) => {
+      {},
+      async () => {
         const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
-        return { contents: [{ uri: uri.href, mimeType: WIDGET_MIME_TYPE, text: html, _meta: {
-          ui: { csp: { resourceDomains: [R2_SCREENSHOT_DOMAIN] } },
-        } }] };
+        return { contents: [{ uri: SCREENSHOT_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
       }
     );
 
     // --- search_components: text-based search over the Scry component vector DB ---
-    this.server.registerTool(
+    registerAppTool(
+      this.server,
       "search_components",
       {
         description: [
@@ -287,7 +288,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     );
 
     // --- search_by_image: image-based visual similarity search ---
-    this.server.registerTool(
+    registerAppTool(
+      this.server,
       "search_by_image",
       {
         description: [
@@ -343,7 +345,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // Returns BOTH an MCP image content block (for clients that support it, e.g. Claude)
     // AND a presigned URL as text (for clients that don't support image blocks, e.g. ChatGPT).
     // This dual-return strategy ensures the tool works across all MCP clients.
-    this.server.registerTool(
+    registerAppTool(
+      this.server,
       "get_component_screenshot",
       {
         description: [
