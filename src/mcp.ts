@@ -170,6 +170,25 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       screenshotUrls.map(url => url ? this.getPresignedUrl(url) : Promise.resolve(null))
     );
 
+    // Fetch image bytes in parallel and convert to base64 data URIs.
+    // Claude Desktop's iframe CSP blocks external image domains, so we embed
+    // images as data: URIs which bypass CSP restrictions.
+    const imageDataUris = await Promise.all(
+      presignResults.map(async (pr) => {
+        if (!pr) return undefined;
+        try {
+          const response = await this.fetchWithTimeout(pr.url, {}, 10_000);
+          if (!response.ok) return undefined;
+          const buffer = await response.arrayBuffer();
+          const mimeType = response.headers.get("content-type") || "image/png";
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+          return `data:${mimeType};base64,${base64}`;
+        } catch {
+          return undefined;
+        }
+      })
+    );
+
     // Format results for readability in Claude (text content, backward compat)
     const formatted = data.results.map((r, i) => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
@@ -189,13 +208,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     const summary = `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`;
 
-    // Build structuredContent for widget rendering
+    // Build structuredContent for widget rendering — use data URIs for images
     const widgetResults = data.results.map((r, i) => {
       const jc = r.json_content as Record<string, unknown> | undefined;
       return {
         name: r.component_name || r.id,
         score: r.score,
-        screenshotUrl: presignResults[i]?.url ?? undefined,
+        screenshotUrl: imageDataUris[i] ?? presignResults[i]?.url ?? undefined,
         searchableText: r.searchable_text,
         figmaUrl: jc?.figma_url as string | undefined,
         githubUrl: jc?.github_url as string | undefined,
@@ -436,7 +455,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           content,
           structuredContent: {
             screenshot: {
-              url: presignResult.url,
+              url: imageResult ? `data:${imageResult.mimeType};base64,${imageResult.base64}` : presignResult.url,
               componentName: component_name,
               mimeType: imageResult?.mimeType,
             },
