@@ -1,7 +1,8 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
@@ -24,13 +25,12 @@ export type AuthProps = {
   emailVerified: boolean;
 };
 
-/** Convert ArrayBuffer to base64, chunked to avoid call stack overflow on large buffers */
+/** Convert ArrayBuffer to base64 without spread operator to avoid call stack overflow */
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
 }
@@ -181,33 +181,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       screenshotUrls.map(url => url ? this.getPresignedUrl(url) : Promise.resolve(null))
     );
 
-    // Fetch image bytes in parallel and convert to base64 data URIs.
-    // Claude Desktop's iframe CSP blocks external image domains, so we embed
-    // images as data: URIs which bypass CSP restrictions.
-    const imageDataUris = await Promise.all(
-      presignResults.map(async (pr) => {
-        if (!pr) return undefined;
-        try {
-          const response = await this.fetchWithTimeout(pr.url, {}, 10_000);
-          if (!response.ok) return undefined;
-          const buffer = await response.arrayBuffer();
-          const mimeType = response.headers.get("content-type") || "image/png";
-          const base64 = arrayBufferToBase64(buffer);
-          return `data:${mimeType};base64,${base64}`;
-        } catch {
-          return undefined;
-        }
-      })
-    );
-
-    const dataUriCount = imageDataUris.filter(Boolean).length;
-    const dataUriTotalBytes = imageDataUris.reduce((sum, uri) => sum + (uri?.length || 0), 0);
-    this.log("callSearchAPI", {
-      dataUriCount,
-      dataUriTotalBytes,
-      presignCount: presignResults.filter(Boolean).length,
-    });
-
     // Format results for readability in Claude (text content, backward compat)
     const formatted = data.results.map((r, i) => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
@@ -227,13 +200,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     const summary = `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`;
 
-    // Build structuredContent for widget rendering — use data URIs for images
+    // Build structuredContent for widget rendering — use presigned URLs for images
     const widgetResults = data.results.map((r, i) => {
       const jc = r.json_content as Record<string, unknown> | undefined;
       return {
         name: r.component_name || r.id,
         score: r.score,
-        screenshotUrl: imageDataUris[i] ?? presignResults[i]?.url ?? undefined,
+        screenshotUrl: presignResults[i]?.url,
         searchableText: r.searchable_text,
         figmaUrl: jc?.figma_url as string | undefined,
         githubUrl: jc?.github_url as string | undefined,
@@ -254,29 +227,44 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   async init() {
     // --- Register widget resources (MCP Apps UI) ---
-    const csp = { resourceDomains: [R2_SCREENSHOT_DOMAIN] };
+    // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
+    // CSP only on the read response, not on the registration config.
+    const csp = {
+      resourceDomains: [R2_SCREENSHOT_DOMAIN],
+      connectDomains: [R2_SCREENSHOT_DOMAIN],
+    };
 
-    const resourceConfig = { _meta: { ui: { csp } } };
-
-    registerAppResource(
-      this.server,
+    this.server.registerResource(
       "Search Results Widget",
       SEARCH_RESULTS_WIDGET_URI,
-      resourceConfig,
-      async () => {
+      { mimeType: RESOURCE_MIME_TYPE },
+      async (uri) => {
         const html = await loadHtml(this.env.ASSETS, "/search-results-widget.html");
-        return { contents: [{ uri: SEARCH_RESULTS_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            _meta: { ui: { csp } },
+          }],
+        };
       }
     );
 
-    registerAppResource(
-      this.server,
+    this.server.registerResource(
       "Screenshot Widget",
       SCREENSHOT_WIDGET_URI,
-      resourceConfig,
-      async () => {
+      { mimeType: RESOURCE_MIME_TYPE },
+      async (uri) => {
         const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
-        return { contents: [{ uri: SCREENSHOT_WIDGET_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp } } }] };
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            _meta: { ui: { csp } },
+          }],
+        };
       }
     );
 
@@ -440,7 +428,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             const base64 = arrayBufferToBase64(buffer);
             imageResult = { base64, mimeType };
           }
-        } catch {
+        } catch (err) {
+          this.log("get_component_screenshot", { imageError: String(err) });
           // Image fetch failed — still return the presigned URL
         }
 
@@ -476,9 +465,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           content,
           structuredContent: {
             screenshot: {
-              url: imageResult ? `data:${imageResult.mimeType};base64,${imageResult.base64}` : presignResult.url,
+              url: presignResult.url,
               componentName: component_name,
-              mimeType: imageResult?.mimeType,
+              mimeType: imageResult?.mimeType || "image/png",
             },
           },
         };
