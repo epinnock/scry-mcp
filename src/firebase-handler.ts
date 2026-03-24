@@ -8,7 +8,10 @@ const app = new Hono<{ Bindings: Env }>();
 
 function generateCSRFToken(): { token: string; setCookie: string } {
   const token = crypto.randomUUID();
-  const setCookie = `__Host-csrf=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
+  const isLocal = typeof globalThis !== "undefined";
+  const setCookie = isLocal
+    ? `csrf=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=600`
+    : `__Host-csrf=${token}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
   return { token, setCookie };
 }
 
@@ -17,18 +20,35 @@ function validateCSRFToken(formData: FormData, request: Request): boolean {
   const cookieHeader = request.headers.get("Cookie") || "";
   const match = cookieHeader
     .split(";")
-    .find((c) => c.trim().startsWith("__Host-csrf="));
+    .find((c) => c.trim().startsWith("__Host-csrf=") || c.trim().startsWith("csrf="));
   const cookieToken = match?.split("=")[1]?.trim();
   return !!formToken && formToken === cookieToken;
 }
 
 // ----- Routes -----
 
-// GET /authorize — show the Firebase sign-in page
+// GET /authorize — show the Firebase sign-in page (or auto-approve in dev)
 app.get("/authorize", async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
   if (!oauthReqInfo.clientId) {
     return c.text("Invalid OAuth request", 400);
+  }
+
+  // Dev bypass: skip Firebase login entirely
+  if (c.env.DEV_BYPASS_AUTH) {
+    const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
+      request: oauthReqInfo,
+      userId: "dev-user",
+      metadata: { label: "dev@localhost" },
+      scope: oauthReqInfo.scope,
+      props: {
+        firebaseUid: "dev-user",
+        email: "dev@localhost",
+        displayName: "Dev User",
+        emailVerified: true,
+      },
+    });
+    return Response.redirect(redirectTo);
   }
 
   const { token: csrfToken, setCookie } = generateCSRFToken();
@@ -130,6 +150,7 @@ function renderLoginPage(config: {
       cursor: pointer; background: white; transition: background 0.15s;
     }
     .btn:hover { background: #f0f0f0; }
+    .btn-github { border-color: #333; color: #333; }
     .btn-google { border-color: #4285f4; color: #4285f4; }
     .divider { text-align: center; margin: 1rem 0; color: #999; font-size: 0.875rem; }
     input {
@@ -148,6 +169,9 @@ function renderLoginPage(config: {
     <div id="error" class="error"></div>
     <div id="loading" class="loading">Signing in...</div>
     <div id="auth-ui">
+      <button class="btn btn-github" onclick="signInWithGitHub()">
+        Continue with GitHub
+      </button>
       <button class="btn btn-google" onclick="signInWithGoogle()">
         Continue with Google
       </button>
@@ -194,6 +218,16 @@ function renderLoginPage(config: {
       }
       document.body.appendChild(form);
       form.submit();
+    }
+    async function signInWithGitHub() {
+      try {
+        const provider = new firebase.auth.GithubAuthProvider();
+        const result = await auth.signInWithPopup(provider);
+        const idToken = await result.user.getIdToken();
+        await submitToken(idToken);
+      } catch (err) {
+        showError(err.message || "GitHub sign-in failed");
+      }
     }
     async function signInWithGoogle() {
       try {

@@ -4,3 +4,4 @@ FIREBASE_PROJECT_ID=your-project-id
 SCRY_SEARCH_API_URL=http://localhost:3000
 SCRY_SEARCH_API_KEY=your-dev-search-api-key
 COOKIE_ENCRYPTION_KEY=any-random-string-for-dev
+GEMINI_API_KEY=your-gemini-api-key

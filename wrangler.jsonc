@@ -3,11 +3,18 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "build": {
+    "command": "npm run build:widgets"
+  },
+  "assets": {
+    "directory": "./web/dist/widgets",
+    "binding": "ASSETS"
+  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
-      "id": "<your-kv-namespace-id>",
-      "preview_id": "<your-preview-kv-namespace-id>"
+      "id": "eeef4d48ad254d75bacf09b62782ad7a",
+      "preview_id": "458bc39341e74f3baa8913257b54e356"
     }
   ],
   "durable_objects": {
@@ -19,6 +26,6 @@
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_classes": ["ScryMCP"] }
+    { "tag": "v1", "new_sqlite_classes": ["ScryMCP"] }
   ]
 }
