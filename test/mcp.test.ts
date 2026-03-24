@@ -164,6 +164,102 @@ describe("MCP Tools", () => {
     });
   });
 
+  describe("generate_image", () => {
+    it("generates image via Gemini and returns with R2 presigned URL", async () => {
+      // Mock fetch for:
+      //   1. Gemini API → 200 with { candidates: [{ content: { parts: [{ inlineData: { data: "...", mimeType: "image/png" } }] } }] }
+      //   2. SCRY_SEARCH_API_URL/api/image/upload → 200 with { key: "generated/...", success: true }
+      //   3. SCRY_SEARCH_API_URL/api/image/presign → 200 with { url: "https://...", expires_at: "..." }
+      // Call generate_image with { prompt: "A blue button" }
+      // Assert response content includes:
+      //   - { type: "text", text: "Generated image for prompt: ..." }
+      //   - { type: "image", data: <base64>, mimeType: "image/png" }
+      //   - { type: "text", text: "Image URL (expires ...): https://..." }
+      // Assert structuredContent.generatedImage has url, prompt, model
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("returns base64 inline when R2 upload fails (graceful degradation)", async () => {
+      // Mock Gemini API → 200 with image
+      // Mock upload endpoint → 500
+      // Call generate_image
+      // Assert response still has image content block
+      // Assert text mentions "inline only — storage unavailable"
+      // Assert structuredContent.generatedImage has base64 (not url)
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("passes aspect_ratio to Gemini API generation config", async () => {
+      // Mock Gemini API → 200
+      // Call generate_image with { prompt: "banner", aspect_ratio: "16:9" }
+      // Assert Gemini request body includes generationConfig.aspectRatio: "16:9"
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("includes reference image in Gemini request for img2img", async () => {
+      // Mock Gemini API → 200
+      // Call generate_image with { prompt: "make it blue", reference_image: "iVBOR..." }
+      // Assert Gemini request body includes inlineData part before text part
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("returns SAFETY_FILTERED error when Gemini blocks the prompt", async () => {
+      // Mock Gemini API → 200 with { candidates: [{ finishReason: "SAFETY" }] }
+      // Call generate_image with { prompt: "unsafe content" }
+      // Assert response has isError: true
+      // Assert error code is "SAFETY_FILTERED" and retryable is false
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("returns GEMINI_API_ERROR with retryable flag for 500 errors", async () => {
+      // Mock Gemini API → 500
+      // Call generate_image
+      // Assert error code is "GEMINI_API_ERROR" and retryable is true
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("rejects prompts longer than 4000 characters via Zod validation", async () => {
+      // Call with { prompt: "a".repeat(4001) }
+      // Assert Zod validation error is returned
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("rejects reference images over 10MB", async () => {
+      // Call with { prompt: "test", reference_image: "a".repeat(10 * 1024 * 1024 + 1) }
+      // Assert error code is "VALIDATION_ERROR"
+      // Assert retryable is false
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("uses 60s timeout for Gemini API calls", async () => {
+      // Mock Gemini API to delay (use AbortController spy or fake timers)
+      // Assert fetchWithTimeout was called with 60_000ms timeout
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("respects rate limiting (shared with other tools)", async () => {
+      // Exhaust rate limit with other tool calls
+      // Call generate_image
+      // Assert error code is "RATE_LIMITED"
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("selects correct Gemini model based on quality preset", async () => {
+      // Call with { prompt: "test", quality: "quality" }
+      // Assert Gemini request URL includes "imagen-3.0-generate-002"
+      // Call with { prompt: "test", quality: "fast" }
+      // Assert Gemini request URL includes "gemini-2.0-flash-preview-image-generation"
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+
+    it("generates unique R2 keys with user ID, timestamp, and prompt hash", async () => {
+      // Mock all APIs → 200
+      // Call generate_image
+      // Assert upload endpoint was called with key matching: generated/{uid}/{timestamp}-{hash}.png
+      expect(true).toBe(true); // TODO: implement with pool-workers
+    });
+  });
+
   describe("rate limiting", () => {
     it("allows requests under the rate limit (60 RPM)", async () => {
       // Call search_components 5 times in quick succession

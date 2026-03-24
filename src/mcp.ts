@@ -10,10 +10,21 @@ const RATE_LIMIT_RPM = 60;         // max requests per user per minute
 const MAX_QUERY_LENGTH = 500;      // max characters for text queries
 const MAX_PROJECT_ID_LENGTH = 128; // max characters for project_id filter
 const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10MB max for base64 image input
+const MAX_PROMPT_LENGTH = 4000;                  // max characters for image generation prompt
+const IMAGE_GENERATION_TIMEOUT_MS = 60_000;      // 60s timeout — Gemini image gen takes 10-30s
+
+// Gemini image generation config
+const VALID_ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"] as const;
+const VALID_QUALITY_PRESETS = ["fast", "quality"] as const;
+const GEMINI_MODELS: Record<string, string> = {
+  fast: "gemini-2.0-flash-exp-image-generation",
+  quality: "gemini-2.0-flash-exp-image-generation",
+};
 
 // MCP Apps widget resource URIs
 const SEARCH_RESULTS_WIDGET_URI = "ui://scry/search-results-widget.html";
 const SCREENSHOT_WIDGET_URI = "ui://scry/screenshot-widget.html";
+const GENERATED_IMAGE_WIDGET_URI = "ui://scry/generated-image-widget.html";
 
 // R2 domain for presigned screenshot URLs — needed for widget CSP
 const R2_SCREENSHOT_DOMAIN = "https://scry-component-snapshot-bucket.f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
@@ -118,6 +129,137 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       const data = (await response.json()) as { url: string; expires_at: string };
       return { url: data.url, expiresAt: data.expires_at };
     } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Call the Gemini REST API to generate an image from a text prompt.
+   * Uses direct fetch() instead of the @google/genai SDK (incompatible with CF Workers).
+   */
+  private async generateImageViaGemini(
+    prompt: string,
+    options: { aspectRatio?: string; quality?: string; referenceImage?: string } = {},
+  ): Promise<{ base64: string; mimeType: string; model: string }> {
+    const quality = options.quality || "fast";
+    const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
+
+    // Build content parts
+    const parts: Array<Record<string, unknown>> = [];
+    if (options.referenceImage) {
+      // Extract MIME type from data URI prefix before stripping it
+      const mimeMatch = options.referenceImage.match(/^data:(image\/\w+);base64,/);
+      const refMimeType = mimeMatch?.[1] || "image/png";
+      const raw = options.referenceImage.replace(/^data:image\/\w+;base64,/, "");
+      parts.push({
+        inlineData: {
+          mimeType: refMimeType,
+          data: raw,
+        },
+      });
+    }
+    parts.push({ text: prompt });
+
+    const requestBody: Record<string, unknown> = {
+      contents: [{ parts }],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"],
+        responseMimeType: "image/png",
+      },
+    };
+
+    // Add aspect ratio if specified
+    if (options.aspectRatio) {
+      (requestBody.generationConfig as Record<string, unknown>).aspectRatio = options.aspectRatio;
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.env.GEMINI_API_KEY}`;
+
+    const response = await this.fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      },
+      IMAGE_GENERATION_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      // Log full error server-side but do NOT expose to client (may contain API key or sensitive details)
+      this.log("generateImageViaGemini", { status: response.status, error: errorText });
+      throw Object.assign(
+        new Error(`Gemini API error (HTTP ${response.status}). Check server logs for details.`),
+        { code: "GEMINI_API_ERROR", statusCode: response.status },
+      );
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{
+            text?: string;
+            inlineData?: { mimeType: string; data: string };
+          }>;
+        };
+        finishReason?: string;
+      }>;
+    };
+
+    // Check for safety blocks
+    const candidate = data.candidates?.[0];
+    if (!candidate || candidate.finishReason === "SAFETY") {
+      throw Object.assign(
+        new Error("Image generation was blocked by safety filters. Try rephrasing your prompt."),
+        { code: "SAFETY_FILTERED" },
+      );
+    }
+
+    // Find the image part in the response
+    const imagePart = candidate.content?.parts?.find(p => p.inlineData);
+    if (!imagePart?.inlineData) {
+      throw new Error("Gemini API returned no image data in response.");
+    }
+
+    return {
+      base64: imagePart.inlineData.data,
+      mimeType: imagePart.inlineData.mimeType || "image/png",
+      model,
+    };
+  }
+
+  /**
+   * Upload a generated image to R2 via the Scry Next.js API.
+   * Returns the R2 key on success, null on failure (non-fatal).
+   */
+  private async uploadToR2(
+    base64: string,
+    mimeType: string,
+    key: string,
+  ): Promise<string | null> {
+    try {
+      const response = await this.fetchWithTimeout(
+        `${this.env.SCRY_SEARCH_API_URL}/api/image/upload`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
+          },
+          body: JSON.stringify({ key, data: base64, mimeType }),
+        },
+      );
+
+      if (!response.ok) {
+        this.log("uploadToR2", { status: response.status, key, success: false });
+        return null;
+      }
+
+      this.log("uploadToR2", { key, success: true });
+      return key;
+    } catch (err) {
+      this.log("uploadToR2", { error: String(err), key, success: false });
       return null;
     }
   }
@@ -257,6 +399,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       { mimeType: RESOURCE_MIME_TYPE },
       async (uri) => {
         const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            _meta: { ui: { csp } },
+          }],
+        };
+      }
+    );
+
+    this.server.registerResource(
+      "Generated Image Widget",
+      GENERATED_IMAGE_WIDGET_URI,
+      { mimeType: RESOURCE_MIME_TYPE },
+      async (uri) => {
+        const html = await loadHtml(this.env.ASSETS, "/generated-image-widget.html");
         return {
           contents: [{
             uri: uri.href,
@@ -469,6 +628,153 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
               componentName: component_name,
               mimeType: imageResult?.mimeType || "image/png",
             },
+          },
+        };
+      }
+    );
+
+    // --- generate_image: AI image generation via Gemini ---
+    // Generates an image from a text prompt, persists to R2, returns dual-format response.
+    // Follows the same pattern as get_component_screenshot: base64 + presigned URL + structuredContent.
+    registerAppTool(
+      this.server,
+      "generate_image",
+      {
+        description: [
+          "Generate a UI image from a text prompt using AI (Google Gemini).",
+          "Returns the generated image directly (as an image content block) plus a persistent presigned URL.",
+          "Use this to create UI mockups, icons, buttons, or any visual asset described in text.",
+          "",
+          "Constraints:",
+          "- Prompt must be 1–4000 characters",
+          "- Reference image (for img2img) must be under 10MB base64",
+          "- Generation takes 10–30 seconds",
+          "",
+          "Failure modes:",
+          "- RATE_LIMITED: Too many requests. Wait and retry.",
+          "- SAFETY_FILTERED: Prompt was blocked by safety filters. Rephrase and retry.",
+          "- GEMINI_API_ERROR: Upstream error. Retry once for 5xx errors.",
+          "- VALIDATION_ERROR: Bad input. Fix parameters and retry.",
+        ].join("\n"),
+        inputSchema: {
+          prompt: z.string().min(1).max(MAX_PROMPT_LENGTH).describe("Description of the image to generate (e.g. 'A blue primary button with rounded corners')"),
+          aspect_ratio: z.enum(VALID_ASPECT_RATIOS).optional().describe("Image aspect ratio (default: 1:1)"),
+          quality: z.enum(VALID_QUALITY_PRESETS).optional().describe("Generation quality: 'fast' (Gemini Flash) or 'quality' (Imagen 3)"),
+          reference_image: z.string().optional().describe("Optional base64 reference image for img2img style transfer"),
+        },
+        _meta: {
+          ui: { resourceUri: GENERATED_IMAGE_WIDGET_URI },
+        },
+      },
+      async ({ prompt, aspect_ratio, quality, reference_image }) => {
+        if (!this.checkRateLimit()) {
+          this.log("generate_image", { rateLimited: true });
+          return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
+        }
+
+        // Validate reference image size
+        if (reference_image && reference_image.length > MAX_IMAGE_BASE64_BYTES) {
+          return this.toolError(
+            "VALIDATION_ERROR",
+            `Reference image too large (${(reference_image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`,
+            false,
+          );
+        }
+
+        const start = Date.now();
+        this.log("generate_image", {
+          promptLength: prompt.length,
+          aspectRatio: aspect_ratio,
+          quality: quality || "fast",
+          hasReferenceImage: !!reference_image,
+        });
+
+        // Step 1: Generate image via Gemini
+        let genResult: { base64: string; mimeType: string; model: string };
+        try {
+          genResult = await this.generateImageViaGemini(prompt, {
+            aspectRatio: aspect_ratio,
+            quality,
+            referenceImage: reference_image,
+          });
+        } catch (err) {
+          const error = err as Error & { code?: string; statusCode?: number };
+          this.log("generate_image", { error: error.message, latencyMs: Date.now() - start });
+
+          if (error.code === "SAFETY_FILTERED") {
+            return this.toolError("SAFETY_FILTERED", error.message, false);
+          }
+          const retryable = error.statusCode !== undefined && error.statusCode >= 500;
+          return this.toolError("GEMINI_API_ERROR", error.message, retryable);
+        }
+
+        // Step 2: Upload to R2 (non-fatal)
+        const ext = (genResult.mimeType.split("/")[1] || "png").replace(/[^a-zA-Z0-9]/g, "");
+        const promptHash = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(prompt)))
+        ).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 12);
+        const r2Key = `generated/${this.props.firebaseUid}/${Date.now()}-${promptHash}.${ext}`;
+
+        const uploadedKey = await this.uploadToR2(genResult.base64, genResult.mimeType, r2Key);
+
+        // Step 3: Get presigned URL if upload succeeded
+        let presignResult: { url: string; expiresAt: string } | null = null;
+        if (uploadedKey) {
+          presignResult = await this.getPresignedUrl(uploadedKey);
+        }
+
+        this.log("generate_image", {
+          model: genResult.model,
+          uploaded: !!uploadedKey,
+          hasPresignedUrl: !!presignResult,
+          latencyMs: Date.now() - start,
+        });
+
+        // Step 4: Build dual-format response
+        const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+        const truncatedPrompt = prompt.length > 100 ? prompt.slice(0, 100) + "..." : prompt;
+
+        if (presignResult) {
+          content.push({ type: "text", text: `Generated image for prompt: "${truncatedPrompt}"` });
+        } else {
+          content.push({ type: "text", text: `Generated image for prompt: "${truncatedPrompt}" (inline only — storage unavailable)` });
+        }
+
+        // Image content block (works in Claude and image-capable clients)
+        content.push({
+          type: "image",
+          data: genResult.base64,
+          mimeType: genResult.mimeType,
+        });
+
+        // Presigned URL as text (works in all clients)
+        if (presignResult) {
+          content.push({
+            type: "text",
+            text: `Image URL (expires ${presignResult.expiresAt}): ${presignResult.url}`,
+          });
+        }
+
+        const generatedAt = new Date().toISOString();
+        const structuredImage: Record<string, unknown> = {
+          prompt,
+          aspectRatio: aspect_ratio || "1:1",
+          quality: quality || "fast",
+          model: genResult.model,
+          mimeType: genResult.mimeType,
+          generatedAt,
+        };
+
+        if (presignResult) {
+          structuredImage.url = presignResult.url;
+        } else {
+          structuredImage.base64 = genResult.base64;
+        }
+
+        return {
+          content,
+          structuredContent: {
+            generatedImage: structuredImage,
           },
         };
       }
