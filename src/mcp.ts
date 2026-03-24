@@ -373,7 +373,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
     // CSP only on the read response, not on the registration config.
     const csp = {
-      resourceDomains: [R2_SCREENSHOT_DOMAIN],
+      resourceDomains: [R2_SCREENSHOT_DOMAIN, "data:"],
       connectDomains: [R2_SCREENSHOT_DOMAIN],
     };
 
