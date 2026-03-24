@@ -160,18 +160,19 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
     parts.push({ text: prompt });
 
-    const requestBody: Record<string, unknown> = {
-      contents: [{ parts }],
-      generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"],
-        responseMimeType: "image/png",
-      },
+    const generationConfig: Record<string, unknown> = {
+      responseModalities: ["TEXT", "IMAGE"],
     };
 
-    // Add aspect ratio if specified
+    // Gemini uses snake_case for aspect_ratio in generation_config
     if (options.aspectRatio) {
-      (requestBody.generationConfig as Record<string, unknown>).aspectRatio = options.aspectRatio;
+      generationConfig.aspect_ratio = options.aspectRatio;
     }
+
+    const requestBody: Record<string, unknown> = {
+      contents: [{ parts }],
+      generationConfig,
+    };
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.env.GEMINI_API_KEY}`;
 
