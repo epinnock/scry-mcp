@@ -17,8 +17,8 @@ const IMAGE_GENERATION_TIMEOUT_MS = 60_000;      // 60s timeout — Gemini image
 const VALID_ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"] as const;
 const VALID_QUALITY_PRESETS = ["fast", "quality"] as const;
 const GEMINI_MODELS: Record<string, string> = {
-  fast: "gemini-2.0-flash-exp-image-generation",
-  quality: "gemini-2.0-flash-exp-image-generation",
+  fast: "gemini-3.1-flash-image-preview",
+  quality: "gemini-3-pro-image-preview",
 };
 
 // MCP Apps widget resource URIs
@@ -659,7 +659,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         inputSchema: {
           prompt: z.string().min(1).max(MAX_PROMPT_LENGTH).describe("Description of the image to generate (e.g. 'A blue primary button with rounded corners')"),
           aspect_ratio: z.enum(VALID_ASPECT_RATIOS).optional().describe("Image aspect ratio (default: 1:1)"),
-          quality: z.enum(VALID_QUALITY_PRESETS).optional().describe("Generation quality: 'fast' (Gemini Flash) or 'quality' (Imagen 3)"),
+          quality: z.enum(VALID_QUALITY_PRESETS).optional().describe("Generation quality: 'fast' (Gemini 3.1 Flash) or 'quality' (Gemini 3 Pro)"),
           reference_image: z.string().optional().describe("Optional base64 reference image for img2img style transfer"),
         },
         _meta: {
