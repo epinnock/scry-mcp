@@ -375,6 +375,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const csp = {
       resourceDomains: [R2_SCREENSHOT_DOMAIN, "data:"],
       connectDomains: [R2_SCREENSHOT_DOMAIN],
+      "img-src": [R2_SCREENSHOT_DOMAIN, "data:"],
     };
 
     this.server.registerResource(
