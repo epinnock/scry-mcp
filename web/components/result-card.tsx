@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 export interface ResultData {
   name: string;
@@ -18,6 +18,8 @@ interface ResultCardProps {
 }
 
 export function ResultCard({ result, onOpenLink }: ResultCardProps) {
+  const [aspectRatio, setAspectRatio] = useState("16/10");
+
   const handleClick = () => {
     if (result.screenshotUrl && onOpenLink) {
       onOpenLink(result.screenshotUrl);
@@ -27,12 +29,18 @@ export function ResultCard({ result, onOpenLink }: ResultCardProps) {
   return (
     <div style={styles.card} onClick={handleClick}>
       {result.screenshotUrl && (
-        <div style={styles.imageContainer}>
+        <div style={{ ...styles.imageContainer, aspectRatio }}>
           <img
             src={result.screenshotUrl}
             alt={result.name}
             style={styles.image}
             loading="lazy"
+            onLoad={(e) => {
+              const img = e.target as HTMLImageElement;
+              if (img.naturalWidth && img.naturalHeight) {
+                setAspectRatio(`${img.naturalWidth}/${img.naturalHeight}`);
+              }
+            }}
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
@@ -114,11 +122,12 @@ const styles: Record<string, React.CSSProperties> = {
     aspectRatio: "16/10",
     overflow: "hidden",
     background: "var(--color-background-tertiary, #f5f5f5)",
+    transition: "aspect-ratio 0.15s ease",
   },
   image: {
     width: "100%",
     height: "100%",
-    objectFit: "cover",
+    objectFit: "contain",
     display: "block",
   },
   info: {
