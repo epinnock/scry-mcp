@@ -287,8 +287,20 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       const errorText = await response.text();
       const retryable = response.status >= 500 || response.status === 429;
       this.log("callSearchAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
+
+      let errorCode: string;
+      if (response.status === 401) {
+        errorCode = "AUTH_REQUIRED";
+      } else if (response.status === 403) {
+        errorCode = "ACCESS_DENIED";
+      } else if (response.status === 429) {
+        errorCode = "UPSTREAM_RATE_LIMITED";
+      } else {
+        errorCode = `SEARCH_API_${response.status}`;
+      }
+
       return this.toolError(
-        response.status === 429 ? "UPSTREAM_RATE_LIMITED" : `SEARCH_API_${response.status}`,
+        errorCode,
         `Search API returned ${response.status}: ${errorText}`,
         retryable,
       );
