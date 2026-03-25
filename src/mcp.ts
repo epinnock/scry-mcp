@@ -140,24 +140,25 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
    */
   private async generateImageViaGemini(
     prompt: string,
-    options: { aspectRatio?: string; quality?: string; referenceImage?: string } = {},
+    options: { aspectRatio?: string; quality?: string; referenceImages?: string[] } = {},
   ): Promise<{ base64: string; mimeType: string; model: string }> {
     const quality = options.quality || "fast";
     const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
 
-    // Build content parts
+    // Build content parts — reference images first, then text prompt
     const parts: Array<Record<string, unknown>> = [];
-    if (options.referenceImage) {
-      // Extract MIME type from data URI prefix before stripping it
-      const mimeMatch = options.referenceImage.match(/^data:(image\/\w+);base64,/);
-      const refMimeType = mimeMatch?.[1] || "image/png";
-      const raw = options.referenceImage.replace(/^data:image\/\w+;base64,/, "");
-      parts.push({
-        inlineData: {
-          mimeType: refMimeType,
-          data: raw,
-        },
-      });
+    if (options.referenceImages) {
+      for (const refImage of options.referenceImages) {
+        const mimeMatch = refImage.match(/^data:(image\/\w+);base64,/);
+        const refMimeType = mimeMatch?.[1] || "image/png";
+        const raw = refImage.replace(/^data:image\/\w+;base64,/, "");
+        parts.push({
+          inlineData: {
+            mimeType: refMimeType,
+            data: raw,
+          },
+        });
+      }
     }
     parts.push({ text: prompt });
 
@@ -659,10 +660,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Generate a UI image from a text prompt using AI (Google Gemini).",
           "Returns the generated image directly (as an image content block) plus a persistent presigned URL.",
           "Use this to create UI mockups, icons, buttons, or any visual asset described in text.",
+          "Supports multiple reference images via reference_images array.",
           "",
           "Constraints:",
           "- Prompt must be 1–4000 characters",
-          "- Reference image (for img2img) must be under 10MB base64",
+          "- Reference image(s) must each be under 10MB base64",
           "- Generation takes 10–30 seconds",
           "",
           "Failure modes:",
@@ -675,25 +677,38 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           prompt: z.string().min(1).max(MAX_PROMPT_LENGTH).describe("Description of the image to generate (e.g. 'A blue primary button with rounded corners')"),
           aspect_ratio: z.enum(VALID_ASPECT_RATIOS).optional().describe("Image aspect ratio (default: 1:1)"),
           quality: z.enum(VALID_QUALITY_PRESETS).optional().describe("Generation quality: 'fast' (Gemini 3.1 Flash) or 'quality' (Gemini 3 Pro)"),
-          reference_image: z.string().optional().describe("Optional base64 reference image for img2img style transfer"),
+          reference_image: z.string().optional().describe("(Deprecated) Single base64 reference image. Use reference_images instead."),
+          reference_images: z.array(z.string()).optional().describe("Array of base64 reference images for img2img style transfer"),
         },
         _meta: {
           ui: { resourceUri: GENERATED_IMAGE_WIDGET_URI },
         },
       },
-      async ({ prompt, aspect_ratio, quality, reference_image }) => {
+      async ({ prompt, aspect_ratio, quality, reference_image, reference_images }) => {
         if (!this.checkRateLimit()) {
           this.log("generate_image", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
-        // Validate reference image size
-        if (reference_image && reference_image.length > MAX_IMAGE_BASE64_BYTES) {
-          return this.toolError(
-            "VALIDATION_ERROR",
-            `Reference image too large (${(reference_image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`,
-            false,
-          );
+        // Merge reference_image (deprecated) + reference_images into a single deduplicated array
+        const mergedImages: string[] = [];
+        const seen = new Set<string>();
+        for (const img of [...(reference_images || []), ...(reference_image ? [reference_image] : [])]) {
+          if (!seen.has(img)) {
+            seen.add(img);
+            mergedImages.push(img);
+          }
+        }
+
+        // Validate each reference image size individually
+        for (let i = 0; i < mergedImages.length; i++) {
+          if (mergedImages[i].length > MAX_IMAGE_BASE64_BYTES) {
+            return this.toolError(
+              "VALIDATION_ERROR",
+              `Reference image ${i + 1} too large (${(mergedImages[i].length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64 per image.`,
+              false,
+            );
+          }
         }
 
         const start = Date.now();
@@ -701,7 +716,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           promptLength: prompt.length,
           aspectRatio: aspect_ratio,
           quality: quality || "fast",
-          hasReferenceImage: !!reference_image,
+          referenceImageCount: mergedImages.length,
         });
 
         // Step 1: Generate image via Gemini
@@ -710,7 +725,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           genResult = await this.generateImageViaGemini(prompt, {
             aspectRatio: aspect_ratio,
             quality,
-            referenceImage: reference_image,
+            referenceImages: mergedImages.length > 0 ? mergedImages : undefined,
           });
         } catch (err) {
           const error = err as Error & { code?: string; statusCode?: number };
