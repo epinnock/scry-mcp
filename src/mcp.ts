@@ -28,6 +28,7 @@ const GENERATED_IMAGE_WIDGET_URI = "ui://scry/generated-image-widget.html";
 
 // R2 domain for presigned screenshot URLs — needed for widget CSP
 const R2_SCREENSHOT_DOMAIN = "https://scry-component-snapshot-bucket.f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
+const R2_SCREENSHOT_DOMAIN_PATH_STYLE = "https://f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
 
 export type AuthProps = {
   firebaseUid: string;
@@ -373,9 +374,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
     // CSP only on the read response, not on the registration config.
     const csp = {
-      resourceDomains: [R2_SCREENSHOT_DOMAIN, "data:"],
-      connectDomains: [R2_SCREENSHOT_DOMAIN],
-      "img-src": [R2_SCREENSHOT_DOMAIN, "data:"],
+      resourceDomains: [R2_SCREENSHOT_DOMAIN, R2_SCREENSHOT_DOMAIN_PATH_STYLE, "data:"],
+      connectDomains: [R2_SCREENSHOT_DOMAIN, R2_SCREENSHOT_DOMAIN_PATH_STYLE],
+      "img-src": [R2_SCREENSHOT_DOMAIN, R2_SCREENSHOT_DOMAIN_PATH_STYLE, "data:"],
     };
 
     this.server.registerResource(
