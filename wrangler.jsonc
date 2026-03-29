@@ -3,6 +3,13 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "build": {
+    "command": "npm run build:widgets"
+  },
+  "assets": {
+    "directory": "./web/dist/widgets",
+    "binding": "ASSETS"
+  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",

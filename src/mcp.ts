@@ -1,6 +1,8 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
@@ -9,12 +11,36 @@ const MAX_QUERY_LENGTH = 500;      // max characters for text queries
 const MAX_PROJECT_ID_LENGTH = 128; // max characters for project_id filter
 const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10MB max for base64 image input
 
+// MCP Apps widget resource URIs
+const SEARCH_RESULTS_WIDGET_URI = "ui://scry/search-results-widget.html";
+const SCREENSHOT_WIDGET_URI = "ui://scry/screenshot-widget.html";
+
+// R2 domain for presigned screenshot URLs — needed for widget CSP
+const R2_SCREENSHOT_DOMAIN = "https://scry-component-snapshot-bucket.f54b9c10de9d140756dbf449aa124f1e.r2.cloudflarestorage.com";
+
 export type AuthProps = {
   firebaseUid: string;
   email: string;
   displayName: string;
   emailVerified: boolean;
 };
+
+/** Convert ArrayBuffer to base64 without spread operator to avoid call stack overflow */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+/** Fetch compiled widget HTML from the ASSETS binding */
+async function loadHtml(assets: Fetcher, path: string): Promise<string> {
+  const request = new Request(new URL(path, "https://assets.invalid").toString());
+  const response = await assets.fetch(request);
+  return response.text();
+}
 
 export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   server = new McpServer({
@@ -96,7 +122,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
   }
 
-  /** Helper to call the Scry search API */
+  /** Helper to call the Scry search API and return both text content and structuredContent for widgets */
   private async callSearchAPI(body: Record<string, unknown>) {
     const start = Date.now();
 
@@ -144,7 +170,18 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       success: true,
     });
 
-    // Format results for readability in Claude
+    // Extract screenshot URLs for presigning (for widget thumbnails)
+    const screenshotUrls = data.results.map(r => {
+      const jc = r.json_content as Record<string, unknown> | undefined;
+      return r.screenshot_url || (jc?.screenshotR2Url as string | undefined);
+    });
+
+    // Batch-generate presigned URLs in parallel for all results with screenshots
+    const presignResults = await Promise.all(
+      screenshotUrls.map(url => url ? this.getPresignedUrl(url) : Promise.resolve(null))
+    );
+
+    // Format results for readability in Claude (text content, backward compat)
     const formatted = data.results.map((r, i) => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
       if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
@@ -155,7 +192,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         if (jc.storybook_url) lines.push(`   Storybook: ${jc.storybook_url}`);
         if (Array.isArray(jc.tags) && jc.tags.length) lines.push(`   Tags: ${jc.tags.join(", ")}`);
       }
-      // Use screenshot_url if available, otherwise fall back to screenshotR2Url from json_content
       const screenshotUrl = r.screenshot_url || (jc?.screenshotR2Url as string | undefined);
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
@@ -164,35 +200,103 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     const summary = `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`;
 
+    // Build structuredContent for widget rendering — use presigned URLs for images
+    const widgetResults = data.results.map((r, i) => {
+      const jc = r.json_content as Record<string, unknown> | undefined;
+      return {
+        name: r.component_name || r.id,
+        score: r.score,
+        screenshotUrl: presignResults[i]?.url,
+        searchableText: r.searchable_text,
+        figmaUrl: jc?.figma_url as string | undefined,
+        githubUrl: jc?.github_url as string | undefined,
+        storybookUrl: jc?.storybook_url as string | undefined,
+        tags: Array.isArray(jc?.tags) ? jc.tags as string[] : undefined,
+        projectId: r.project_id,
+      };
+    });
+
     return {
       content: [{ type: "text" as const, text: `${summary}\n\n${formatted.join("\n\n")}` }],
+      structuredContent: {
+        results: widgetResults,
+        summary,
+      },
     };
   }
 
   async init() {
+    // --- Register widget resources (MCP Apps UI) ---
+    // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
+    // CSP only on the read response, not on the registration config.
+    const csp = {
+      resourceDomains: [R2_SCREENSHOT_DOMAIN],
+      connectDomains: [R2_SCREENSHOT_DOMAIN],
+    };
+
+    this.server.registerResource(
+      "Search Results Widget",
+      SEARCH_RESULTS_WIDGET_URI,
+      { mimeType: RESOURCE_MIME_TYPE },
+      async (uri) => {
+        const html = await loadHtml(this.env.ASSETS, "/search-results-widget.html");
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            _meta: { ui: { csp } },
+          }],
+        };
+      }
+    );
+
+    this.server.registerResource(
+      "Screenshot Widget",
+      SCREENSHOT_WIDGET_URI,
+      { mimeType: RESOURCE_MIME_TYPE },
+      async (uri) => {
+        const html = await loadHtml(this.env.ASSETS, "/screenshot-widget.html");
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            _meta: { ui: { csp } },
+          }],
+        };
+      }
+    );
+
     // --- search_components: text-based search over the Scry component vector DB ---
-    this.server.tool(
+    registerAppTool(
+      this.server,
       "search_components",
-      [
-        "Search for UI components by text query.",
-        "Uses semantic (dense) and keyword (BM25 sparse) hybrid search across the Scry component database.",
-        "Returns component names, relevance scores, metadata, Figma/GitHub/Storybook links, and screenshot URLs.",
-        "",
-        "Constraints:",
-        "- Query must be 1–500 characters",
-        "- Returns max 50 results per page",
-        "- Use get_component_screenshot to view a result's screenshot image",
-        "",
-        "Failure modes:",
-        "- RATE_LIMITED: Too many requests. Wait and retry.",
-        "- SEARCH_API_5xx: Upstream error. Retry once.",
-        "- VALIDATION_ERROR: Bad input. Fix parameters and retry.",
-      ].join("\n"),
       {
-        query: z.string().min(1).max(MAX_QUERY_LENGTH).describe("Text search query (e.g. 'primary button', 'date picker', 'navigation bar')"),
-        limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
-        page: z.number().min(1).default(1).describe("Page number for pagination"),
-        project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+        description: [
+          "Search for UI components by text query.",
+          "Uses semantic (dense) and keyword (BM25 sparse) hybrid search across the Scry component database.",
+          "Returns component names, relevance scores, metadata, Figma/GitHub/Storybook links, and screenshot URLs.",
+          "",
+          "Constraints:",
+          "- Query must be 1–500 characters",
+          "- Returns max 50 results per page",
+          "- Use get_component_screenshot to view a result's screenshot image",
+          "",
+          "Failure modes:",
+          "- RATE_LIMITED: Too many requests. Wait and retry.",
+          "- SEARCH_API_5xx: Upstream error. Retry once.",
+          "- VALIDATION_ERROR: Bad input. Fix parameters and retry.",
+        ].join("\n"),
+        inputSchema: {
+          query: z.string().min(1).max(MAX_QUERY_LENGTH).describe("Text search query (e.g. 'primary button', 'date picker', 'navigation bar')"),
+          limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
+          page: z.number().min(1).default(1).describe("Page number for pagination"),
+          project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+        },
+        _meta: {
+          ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
+        },
       },
       async ({ query, limit, page, project_id }) => {
         if (!this.checkRateLimit()) {
@@ -212,29 +316,35 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     );
 
     // --- search_by_image: image-based visual similarity search ---
-    this.server.tool(
+    registerAppTool(
+      this.server,
       "search_by_image",
-      [
-        "Search for visually similar UI components by providing a base64-encoded image.",
-        "Uses image embeddings for visual similarity matching via Jina Embeddings v4.",
-        "Can be combined with a text query for hybrid (text + visual) search.",
-        "",
-        "Constraints:",
-        "- Image must be base64-encoded PNG or JPG, under 10MB",
-        "- Can include data URI prefix (data:image/png;base64,...) or raw base64",
-        "- Returns max 50 results per page",
-        "",
-        "Failure modes:",
-        "- RATE_LIMITED: Too many requests. Wait and retry.",
-        "- VALIDATION_ERROR: Image too large or invalid format.",
-        "- SEARCH_API_5xx: Upstream error. Retry once.",
-      ].join("\n"),
       {
-        image: z.string().describe("Base64-encoded image (PNG/JPG, max 10MB). Can include data URI prefix or raw base64."),
-        query: z.string().max(MAX_QUERY_LENGTH).optional().describe("Optional text query to combine with image search for hybrid results"),
-        limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
-        page: z.number().min(1).default(1).describe("Page number for pagination"),
-        project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+        description: [
+          "Search for visually similar UI components by providing a base64-encoded image.",
+          "Uses image embeddings for visual similarity matching via Jina Embeddings v4.",
+          "Can be combined with a text query for hybrid (text + visual) search.",
+          "",
+          "Constraints:",
+          "- Image must be base64-encoded PNG or JPG, under 10MB",
+          "- Can include data URI prefix (data:image/png;base64,...) or raw base64",
+          "- Returns max 50 results per page",
+          "",
+          "Failure modes:",
+          "- RATE_LIMITED: Too many requests. Wait and retry.",
+          "- VALIDATION_ERROR: Image too large or invalid format.",
+          "- SEARCH_API_5xx: Upstream error. Retry once.",
+        ].join("\n"),
+        inputSchema: {
+          image: z.string().describe("Base64-encoded image (PNG/JPG, max 10MB). Can include data URI prefix or raw base64."),
+          query: z.string().max(MAX_QUERY_LENGTH).optional().describe("Optional text query to combine with image search for hybrid results"),
+          limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
+          page: z.number().min(1).default(1).describe("Page number for pagination"),
+          project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+        },
+        _meta: {
+          ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
+        },
       },
       async ({ image, query, limit, page, project_id }) => {
         if (!this.checkRateLimit()) {
@@ -263,24 +373,30 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // Returns BOTH an MCP image content block (for clients that support it, e.g. Claude)
     // AND a presigned URL as text (for clients that don't support image blocks, e.g. ChatGPT).
     // This dual-return strategy ensures the tool works across all MCP clients.
-    this.server.tool(
+    registerAppTool(
+      this.server,
       "get_component_screenshot",
-      [
-        "Fetch a component screenshot image so you can see it.",
-        "Use this after search_components or search_by_image to view the actual screenshot of a specific result.",
-        "Returns the image directly (as an image content block) plus a temporary presigned URL.",
-        "",
-        "Constraints:",
-        "- The screenshot_url must come from a search result's screenshot_url field",
-        "- Presigned URLs expire after 1 hour",
-        "",
-        "Failure modes:",
-        "- SCREENSHOT_FETCH_FAILED: Could not fetch the image or generate URL. The screenshot may not exist.",
-        "- RATE_LIMITED: Too many requests. Wait and retry.",
-      ].join("\n"),
       {
-        screenshot_url: z.string().min(1).describe("The screenshot_url value from a search result"),
-        component_name: z.string().optional().describe("Component name (for labeling the response)"),
+        description: [
+          "Fetch a component screenshot image so you can see it.",
+          "Use this after search_components or search_by_image to view the actual screenshot of a specific result.",
+          "Returns the image directly (as an image content block) plus a temporary presigned URL.",
+          "",
+          "Constraints:",
+          "- The screenshot_url must come from a search result's screenshot_url field",
+          "- Presigned URLs expire after 1 hour",
+          "",
+          "Failure modes:",
+          "- SCREENSHOT_FETCH_FAILED: Could not fetch the image or generate URL. The screenshot may not exist.",
+          "- RATE_LIMITED: Too many requests. Wait and retry.",
+        ].join("\n"),
+        inputSchema: {
+          screenshot_url: z.string().min(1).describe("The screenshot_url value from a search result"),
+          component_name: z.string().optional().describe("Component name (for labeling the response)"),
+        },
+        _meta: {
+          ui: { resourceUri: SCREENSHOT_WIDGET_URI },
+        },
       },
       async ({ screenshot_url, component_name }) => {
         if (!this.checkRateLimit()) {
@@ -309,10 +425,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           if (response.ok) {
             const buffer = await response.arrayBuffer();
             const mimeType = response.headers.get("content-type") || "image/png";
-            const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+            const base64 = arrayBufferToBase64(buffer);
             imageResult = { base64, mimeType };
           }
-        } catch {
+        } catch (err) {
+          this.log("get_component_screenshot", { imageError: String(err) });
           // Image fetch failed — still return the presigned URL
         }
 
@@ -344,7 +461,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           text: `Screenshot URL (expires ${presignResult.expiresAt}): ${presignResult.url}`,
         });
 
-        return { content };
+        return {
+          content,
+          structuredContent: {
+            screenshot: {
+              url: presignResult.url,
+              componentName: component_name,
+              mimeType: imageResult?.mimeType || "image/png",
+            },
+          },
+        };
       }
     );
 
