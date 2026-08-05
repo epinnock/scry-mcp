@@ -3,13 +3,6 @@ import { describe, it, expect } from "vitest";
 declare const process: { env: Record<string, string | undefined> };
 const BASE_URL = process.env.MCP_TEST_URL ?? "http://localhost:8787";
 
-interface HealthResponse {
-  status: string;
-  server: string;
-  version: string;
-  timestamp: string;
-}
-
 interface OAuthMetadata {
   authorization_endpoint: string;
   token_endpoint: string;
