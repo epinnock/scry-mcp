@@ -46,14 +46,17 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Run Tests
-        run: npm test
-
-      # `wrangler deploy` runs this via the build.command hook in
-      # wrangler.jsonc, so a broken widget build fails the deploy rather than
-      # the test job. Build it here to catch that on the PR instead.
+      # Must precede the tests. @cloudflare/vitest-pool-workers reads
+      # wrangler.jsonc, including assets.directory (./web/dist/widgets) — a
+      # build output that is gitignored and so absent on a fresh checkout.
+      # Without this the whole suite aborts before collecting a single test.
+      # It also means a broken widget build fails the PR rather than the deploy,
+      # since wrangler runs the same command via its build.command hook.
       - name: Build Widgets
         run: npm run build:widgets
+
+      - name: Run Tests
+        run: npm test
 
   deploy-production:
     runs-on: ubuntu-latest
