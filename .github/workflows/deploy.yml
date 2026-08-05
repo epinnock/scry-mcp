@@ -1,0 +1,114 @@
+name: Deploy Scry MCP
+
+# scry-mcp is the OAuth boundary for the MCP server, and until now it was the
+# only service in the fleet without CI — every deploy was run by hand from a
+# developer machine. Tests gate deploys here the same way they do in
+# scry-build-processing-service and scry-cdn-service.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # This repo uses npm (package-lock.json), unlike the pnpm services.
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Must precede the tests. @cloudflare/vitest-pool-workers reads
+      # wrangler.jsonc, including assets.directory (./web/dist/widgets) — a
+      # build output that is gitignored and so absent on a fresh checkout.
+      # Without this the whole suite aborts before collecting a single test.
+      # It also means a broken widget build fails the PR rather than the deploy,
+      # since wrangler runs the same command via its build.command hook.
+      - name: Build Widgets
+        run: npm run build:widgets
+
+      - name: Run Tests
+        run: npm test
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: test
+    environment: production
+    # No staging deploy: wrangler.jsonc defines a single worker with no `env`
+    # blocks, and a staging environment would need its own KV namespace and
+    # Durable Object migration. Add those first if staging is wanted.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # wrangler runs `npm run build:widgets` itself via the build.command hook.
+      - name: Deploy Worker (Production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      # Cheap post-deploy assertion that the OAuth boundary still behaves:
+      # /mcp must challenge (401) and the metadata document must stay public.
+      # A worker that boots but answers 500 here is a failed deploy.
+      - name: Smoke Test OAuth Endpoints
+        run: |
+          set -euo pipefail
+          BASE=https://scry-mcp.epinnock.workers.dev
+          mcp=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$BASE/mcp")
+          meta=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+                   "$BASE/.well-known/oauth-authorization-server")
+          echo "/mcp=$mcp  /.well-known/oauth-authorization-server=$meta"
+          [ "$mcp" = "401" ] || { echo "::error::/mcp returned $mcp, expected 401"; exit 1; }
+          [ "$meta" = "200" ] || { echo "::error::OAuth metadata returned $meta, expected 200"; exit 1; }
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Worker:** scry-mcp" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

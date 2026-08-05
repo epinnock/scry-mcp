@@ -2,6 +2,7 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+import { extractResultMetadata } from "./utils/result-metadata.js";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -340,16 +341,25 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     // Format results for readability in Claude (text content, backward compat)
     const formatted = data.results.map((r, i) => {
-      const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
-      if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
       const jc = r.json_content as Record<string, unknown> | undefined;
-      if (jc) {
-        if (jc.figma_url) lines.push(`   Figma: ${jc.figma_url}`);
-        if (jc.github_url) lines.push(`   GitHub: ${jc.github_url}`);
-        if (jc.storybook_url) lines.push(`   Storybook: ${jc.storybook_url}`);
-        if (Array.isArray(jc.tags) && jc.tags.length) lines.push(`   Tags: ${jc.tags.join(", ")}`);
+      const meta = extractResultMetadata(jc);
+
+      const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
+      if (meta.description) lines.push(`   ${meta.description}`);
+      else if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
+      // Source path is what makes a result actionable — an agent cannot import
+      // the component without it, so keep it directly under the name.
+      if (meta.sourcePath) lines.push(`   Source: ${meta.sourcePath}`);
+      if (meta.storyTitle) {
+        lines.push(meta.variant
+          ? `   Story: ${meta.storyTitle} / ${meta.variant}`
+          : `   Story: ${meta.storyTitle}`);
       }
-      const screenshotUrl = r.screenshot_url || (jc?.screenshotR2Url as string | undefined);
+      if (meta.figmaUrl) lines.push(`   Figma: ${meta.figmaUrl}`);
+      if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
+      if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
+      if (meta.tags?.length) lines.push(`   Tags: ${meta.tags.join(", ")}`);
+      const screenshotUrl = r.screenshot_url || meta.screenshotUrl;
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
       return lines.join("\n");
@@ -359,16 +369,20 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     // Build structuredContent for widget rendering — use presigned URLs for images
     const widgetResults = data.results.map((r, i) => {
-      const jc = r.json_content as Record<string, unknown> | undefined;
+      const meta = extractResultMetadata(r.json_content as Record<string, unknown> | undefined);
       return {
         name: r.component_name || r.id,
         score: r.score,
         screenshotUrl: presignResults[i]?.url,
         searchableText: r.searchable_text,
-        figmaUrl: jc?.figma_url as string | undefined,
-        githubUrl: jc?.github_url as string | undefined,
-        storybookUrl: jc?.storybook_url as string | undefined,
-        tags: Array.isArray(jc?.tags) ? jc.tags as string[] : undefined,
+        description: meta.description,
+        sourcePath: meta.sourcePath,
+        storyTitle: meta.storyTitle,
+        variant: meta.variant,
+        figmaUrl: meta.figmaUrl,
+        githubUrl: meta.githubUrl,
+        storybookUrl: meta.storybookUrl,
+        tags: meta.tags,
         projectId: r.project_id,
       };
     });

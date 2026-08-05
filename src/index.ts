@@ -25,4 +25,11 @@ export default new OAuthProvider({
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
+  // Claude Code authenticates with a Client ID Metadata Document URL
+  // (client_id=https://claude.ai/oauth/claude-code-client-metadata) rather than
+  // registering dynamically. CIMD was implicit before workers-oauth-provider
+  // 0.8.0 and is opt-in from 0.8.0 on; without this the client is looked up in
+  // KV, never found, and /authorize fails with an opaque 500.
+  // Requires the 'global_fetch_strictly_public' compatibility flag (set in wrangler.jsonc).
+  clientIdMetadataDocumentEnabled: true,
 });
