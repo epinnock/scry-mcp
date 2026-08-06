@@ -4,6 +4,7 @@ import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { extractResultMetadata } from "./utils/result-metadata.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
+import { classifySearchApiError } from "./utils/search-errors.js";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -297,19 +298,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     if (!response.ok) {
       const errorText = await response.text();
-      const retryable = response.status >= 500 || response.status === 429;
       this.log("callSearchAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
 
-      let errorCode: string;
-      if (response.status === 401) {
-        errorCode = "AUTH_REQUIRED";
-      } else if (response.status === 403) {
-        errorCode = "ACCESS_DENIED";
-      } else if (response.status === 429) {
-        errorCode = "UPSTREAM_RATE_LIMITED";
-      } else {
-        errorCode = `SEARCH_API_${response.status}`;
-      }
+      const { code: errorCode, retryable } = classifySearchApiError(response.status);
 
       return this.toolError(
         errorCode,

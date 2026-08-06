@@ -1,5 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it } from "vitest";
 
+// NOTE: these are unimplemented, and marked it.todo so the suite reports them
+// as pending rather than passing. They previously read expect(true).toBe(true),
+// so 39 tests reported green while asserting nothing — which is how a search
+// formatter that returned no source path at all (ISSUES.md #12) sat in
+// production behind a green suite.
+//
+// Implementing them needs a Durable Object harness; see the per-test comments
+// for the intended assertions. Logic that can be tested without that harness
+// has been extracted to src/utils/ and is covered in the sibling test files.
+//
 // NOTE FOR CODING AGENT:
 // These tests require @cloudflare/vitest-pool-workers with Durable Objects.
 // Instantiate ScryMCP with controlled props and call tools through the MCP SDK
@@ -14,17 +24,14 @@ import { describe, it, expect } from "vitest";
 
 describe("MCP Tools", () => {
   describe("whoami", () => {
-    it("returns the authenticated user's UID and email", async () => {
-      // Props: { firebaseUid: "u1", email: "a@b.com", displayName: "A", emailVerified: true }
+          // Props: { firebaseUid: "u1", email: "a@b.com", displayName: "A", emailVerified: true }
       // Call whoami tool
       // Assert response text contains "u1" and "a@b.com"
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns the authenticated user's UID and email");
   });
 
   describe("search_components", () => {
-    it("calls the Scry search API with text query and auth headers", async () => {
-      // Mock globalThis.fetch for SCRY_SEARCH_API_URL/api/search
+          // Mock globalThis.fetch for SCRY_SEARCH_API_URL/api/search
       // Call search_components with { query: "button", limit: 5 }
       // Assert fetch was called with:
       //   - POST method
@@ -32,141 +39,103 @@ describe("MCP Tools", () => {
       //   - X-User-Id header matching firebaseUid
       //   - Authorization: Bearer <SCRY_SEARCH_API_KEY>
       //   - Body: { text: "button", limit: 5, page: 1 }
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("calls the Scry search API with text query and auth headers");
 
-    it("returns structured error when search API returns non-200", async () => {
-      // Mock fetch to return 500
+          // Mock fetch to return 500
       // Call search_components
       // Assert response has isError: true
       // Assert response text is JSON: { error: "SEARCH_API_500", message: "...", retryable: true }
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns structured error when search API returns non-200");
 
-    it("marks 429 upstream errors as UPSTREAM_RATE_LIMITED and retryable", async () => {
-      // Mock fetch to return 429
+          // Mock fetch to return 429
       // Call search_components
       // Assert error code is "UPSTREAM_RATE_LIMITED" and retryable is true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("marks 429 upstream errors as UPSTREAM_RATE_LIMITED and retryable");
 
-    it("formats results with component names, scores, and metadata", async () => {
-      // Mock fetch to return a valid response with results
+          // Mock fetch to return a valid response with results
       // Call search_components with { query: "date picker", limit: 3 }
       // Assert response text includes component_name, score, and metadata links
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("formats results with component names, scores, and metadata");
 
-    it("passes project_id filter when provided", async () => {
-      // Call search_components with { query: "nav", limit: 5, project_id: "proj-123" }
+          // Call search_components with { query: "nav", limit: 5, project_id: "proj-123" }
       // Assert the request body sent to the API includes project_id: "proj-123"
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("passes project_id filter when provided");
 
-    it("validates query parameter is a string", async () => {
-      // Call with invalid args (no query)
+          // Call with invalid args (no query)
       // Assert Zod validation error is returned
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("validates query parameter is a string");
 
-    it("rejects query longer than 500 characters via Zod validation", async () => {
-      // Call with { query: "a".repeat(501), limit: 5 }
+          // Call with { query: "a".repeat(501), limit: 5 }
       // Assert Zod validation error is returned
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rejects query longer than 500 characters via Zod validation");
 
-    it("rejects project_id longer than 128 characters", async () => {
-      // Call with { query: "button", project_id: "x".repeat(129) }
+          // Call with { query: "button", project_id: "x".repeat(129) }
       // Assert Zod validation error is returned
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rejects project_id longer than 128 characters");
   });
 
   describe("search_by_image", () => {
-    it("calls the Scry search API with base64 image", async () => {
-      // Mock fetch for the search API
+          // Mock fetch for the search API
       // Call search_by_image with { image: "iVBORw0KGgo..." (valid base64) }
       // Assert the request body sent to the API includes image field
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("calls the Scry search API with base64 image");
 
-    it("supports hybrid search with both image and text query", async () => {
-      // Call search_by_image with { image: "...", query: "blue button" }
+          // Call search_by_image with { image: "...", query: "blue button" }
       // Assert the request body includes both image and text fields
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("supports hybrid search with both image and text query");
 
-    it("returns isError: true when search API fails", async () => {
-      // Mock fetch to return 400 with validation error
+          // Mock fetch to return 400 with validation error
       // Assert response has isError: true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns isError: true when search API fails");
 
-    it("rejects image over 10MB with VALIDATION_ERROR", async () => {
-      // Call search_by_image with { image: "a".repeat(10 * 1024 * 1024 + 1) }
+          // Call search_by_image with { image: "a".repeat(10 * 1024 * 1024 + 1) }
       // Assert response has isError: true
       // Assert error code is "VALIDATION_ERROR" and message mentions size
       // Assert retryable is false
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rejects image over 10MB with VALIDATION_ERROR");
   });
 
   describe("get_component_screenshot", () => {
-    it("returns both image content block and presigned URL", async () => {
-      // Mock fetch for:
+          // Mock fetch for:
       //   1. SCRY_SEARCH_API_URL/api/image/screenshots/btn.png → 200 with PNG buffer
       //   2. SCRY_SEARCH_API_URL/api/image/presign → 200 with { url: "https://...", expires_at: "..." }
       // Call get_component_screenshot with { screenshot_url: "screenshots/btn.png" }
       // Assert response content includes:
       //   - { type: "image", data: <base64>, mimeType: "image/png" }
       //   - { type: "text", text: "Screenshot URL (expires ...): https://..." }
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns both image content block and presigned URL");
 
-    it("handles full B2 URLs by extracting the path", async () => {
-      // Call with { screenshot_url: "https://f123.backblazeb2.com/file/bucket/screenshots/btn.png" }
+          // Call with { screenshot_url: "https://f123.backblazeb2.com/file/bucket/screenshots/btn.png" }
       // Assert image proxy fetch was called with /api/image/screenshots/btn.png
       // Assert presign endpoint received the original URL as path
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("handles full B2 URLs by extracting the path");
 
-    it("returns presigned URL even if image proxy fails", async () => {
-      // Mock image proxy to return 500, presign endpoint to return 200
+          // Mock image proxy to return 500, presign endpoint to return 200
       // Assert response has no image block but does have presigned URL text
       // Assert isError is NOT set (partial success is still useful)
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns presigned URL even if image proxy fails");
 
-    it("returns image block even if presign endpoint fails", async () => {
-      // Mock image proxy to return 200, presign endpoint to return 500
+          // Mock image proxy to return 200, presign endpoint to return 500
       // Assert response has image block but no presigned URL text
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns image block even if presign endpoint fails");
 
-    it("returns structured error when both image proxy and presign fail", async () => {
-      // Mock both to return errors
+          // Mock both to return errors
       // Assert response has isError: true
       // Assert error code is "SCREENSHOT_FETCH_FAILED" and retryable is true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns structured error when both image proxy and presign fail");
 
-    it("includes component_name label when provided", async () => {
-      // Call with { screenshot_url: "...", component_name: "PrimaryButton" }
+          // Call with { screenshot_url: "...", component_name: "PrimaryButton" }
       // Assert first content block is text containing "PrimaryButton"
       // Assert subsequent blocks include image and presigned URL
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("includes component_name label when provided");
 
-    it("calls image proxy and presign endpoint in parallel", async () => {
-      // Mock both endpoints with delays
+          // Mock both endpoints with delays
       // Assert total time is ~max(delay1, delay2), not sum
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("calls image proxy and presign endpoint in parallel");
   });
 
   describe("generate_image", () => {
-    it("generates image via Gemini and returns with R2 presigned URL", async () => {
-      // Mock fetch for:
+          // Mock fetch for:
       //   1. Gemini API → 200 with { candidates: [{ content: { parts: [{ inlineData: { data: "...", mimeType: "image/png" } }] } }] }
       //   2. SCRY_SEARCH_API_URL/api/image/upload → 200 with { key: "generated/...", success: true }
       //   3. SCRY_SEARCH_API_URL/api/image/presign → 200 with { url: "https://...", expires_at: "..." }
@@ -176,141 +145,104 @@ describe("MCP Tools", () => {
       //   - { type: "image", data: <base64>, mimeType: "image/png" }
       //   - { type: "text", text: "Image URL (expires ...): https://..." }
       // Assert structuredContent.generatedImage has url, prompt, model
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("generates image via Gemini and returns with R2 presigned URL");
 
-    it("returns base64 inline when R2 upload fails (graceful degradation)", async () => {
-      // Mock Gemini API → 200 with image
+          // Mock Gemini API → 200 with image
       // Mock upload endpoint → 500
       // Call generate_image
       // Assert response still has image content block
       // Assert text mentions "inline only — storage unavailable"
       // Assert structuredContent.generatedImage has base64 (not url)
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns base64 inline when R2 upload fails (graceful degradation)");
 
-    it("passes aspect_ratio to Gemini API generation config", async () => {
-      // Mock Gemini API → 200
+          // Mock Gemini API → 200
       // Call generate_image with { prompt: "banner", aspect_ratio: "16:9" }
       // Assert Gemini request body includes generationConfig.aspectRatio: "16:9"
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("passes aspect_ratio to Gemini API generation config");
 
-    it("includes reference image in Gemini request for img2img", async () => {
-      // Mock Gemini API → 200
+          // Mock Gemini API → 200
       // Call generate_image with { prompt: "make it blue", reference_image: "iVBOR..." }
       // Assert Gemini request body includes inlineData part before text part
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("includes reference image in Gemini request for img2img");
 
-    it("returns SAFETY_FILTERED error when Gemini blocks the prompt", async () => {
-      // Mock Gemini API → 200 with { candidates: [{ finishReason: "SAFETY" }] }
+          // Mock Gemini API → 200 with { candidates: [{ finishReason: "SAFETY" }] }
       // Call generate_image with { prompt: "unsafe content" }
       // Assert response has isError: true
       // Assert error code is "SAFETY_FILTERED" and retryable is false
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns SAFETY_FILTERED error when Gemini blocks the prompt");
 
-    it("returns GEMINI_API_ERROR with retryable flag for 500 errors", async () => {
-      // Mock Gemini API → 500
+          // Mock Gemini API → 500
       // Call generate_image
       // Assert error code is "GEMINI_API_ERROR" and retryable is true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns GEMINI_API_ERROR with retryable flag for 500 errors");
 
-    it("rejects prompts longer than 4000 characters via Zod validation", async () => {
-      // Call with { prompt: "a".repeat(4001) }
+          // Call with { prompt: "a".repeat(4001) }
       // Assert Zod validation error is returned
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rejects prompts longer than 4000 characters via Zod validation");
 
-    it("rejects reference images over 10MB", async () => {
-      // Call with { prompt: "test", reference_image: "a".repeat(10 * 1024 * 1024 + 1) }
+          // Call with { prompt: "test", reference_image: "a".repeat(10 * 1024 * 1024 + 1) }
       // Assert error code is "VALIDATION_ERROR"
       // Assert retryable is false
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rejects reference images over 10MB");
 
-    it("uses 60s timeout for Gemini API calls", async () => {
-      // Mock Gemini API to delay (use AbortController spy or fake timers)
+          // Mock Gemini API to delay (use AbortController spy or fake timers)
       // Assert fetchWithTimeout was called with 60_000ms timeout
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("uses 60s timeout for Gemini API calls");
 
-    it("respects rate limiting (shared with other tools)", async () => {
-      // Exhaust rate limit with other tool calls
+          // Exhaust rate limit with other tool calls
       // Call generate_image
       // Assert error code is "RATE_LIMITED"
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("respects rate limiting (shared with other tools)");
 
-    it("selects correct Gemini model based on quality preset", async () => {
-      // Call with { prompt: "test", quality: "quality" }
+          // Call with { prompt: "test", quality: "quality" }
       // Assert Gemini request URL includes "imagen-3.0-generate-002"
       // Call with { prompt: "test", quality: "fast" }
       // Assert Gemini request URL includes "gemini-2.0-flash-preview-image-generation"
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("selects correct Gemini model based on quality preset");
 
-    it("generates unique R2 keys with user ID, timestamp, and prompt hash", async () => {
-      // Mock all APIs → 200
+          // Mock all APIs → 200
       // Call generate_image
       // Assert upload endpoint was called with key matching: generated/{uid}/{timestamp}-{hash}.png
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("generates unique R2 keys with user ID, timestamp, and prompt hash");
   });
 
   describe("rate limiting", () => {
-    it("allows requests under the rate limit (60 RPM)", async () => {
-      // Call search_components 5 times in quick succession
+          // Call search_components 5 times in quick succession
       // Assert all return results (not rate limit errors)
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("allows requests under the rate limit (60 RPM)");
 
-    it("returns RATE_LIMITED error when exceeding 60 RPM", async () => {
-      // Call search_components 61 times within 1 minute
+          // Call search_components 61 times within 1 minute
       // Assert the 61st call returns { error: "RATE_LIMITED", retryable: true }
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("returns RATE_LIMITED error when exceeding 60 RPM");
 
-    it("rate limit applies across all tools (shared counter)", async () => {
-      // Call search_components 30 times, then search_by_image 30 times, then whoami once
+          // Call search_components 30 times, then search_by_image 30 times, then whoami once
       // Assert the 61st total call returns RATE_LIMITED
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rate limit applies across all tools (shared counter)");
 
-    it("rate limit window slides (old requests expire after 60s)", async () => {
-      // Use fake timers to simulate passage of time
+          // Use fake timers to simulate passage of time
       // Make 60 requests, advance clock by 61 seconds, make 1 more request
       // Assert the last request succeeds (not rate limited)
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("rate limit window slides (old requests expire after 60s)");
   });
 
   describe("request timeouts", () => {
-    it("times out if upstream API takes longer than 30 seconds", async () => {
-      // Mock fetch to delay 31 seconds (use fake timers or AbortController spy)
+          // Mock fetch to delay 31 seconds (use fake timers or AbortController spy)
       // Call search_components
       // Assert response has isError: true (fetch will throw on abort)
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("times out if upstream API takes longer than 30 seconds");
   });
 
   describe("structured logging", () => {
-    it("logs tool name, userId, and latency for search calls", async () => {
-      // Spy on console.log
+          // Spy on console.log
       // Call search_components
       // Assert console.log was called with JSON containing:
       //   tool: "callSearchAPI", userId: <uid>, latencyMs: <number>, success: true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("logs tool name, userId, and latency for search calls");
 
-    it("logs rate limit events", async () => {
-      // Spy on console.log
+          // Spy on console.log
       // Exhaust rate limit, then make one more call
       // Assert console.log was called with JSON containing:
       //   tool: "search_components", rateLimited: true
-      expect(true).toBe(true); // TODO: implement with pool-workers
-    });
+    it.todo("logs rate limit events");
   });
 });
