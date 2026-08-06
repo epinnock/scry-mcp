@@ -472,10 +472,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Uses semantic (dense) and keyword (BM25 sparse) hybrid search across the Scry component database.",
           "Returns component names, relevance scores, metadata, Figma/GitHub/Storybook links, and screenshot URLs.",
           "",
+          "",
+          "Scope — read this before searching:",
+          "- Pass project_id whenever you know it. Results are then only that project's components.",
+          "- You can usually find it without asking: look in the repository for",
+          "  .scry/config.json, .storybook-deployer.json, or a SCRY_PROJECT_ID entry in .env",
+          "  or CI config. Prefer reading it from the repo over asking the user for an ID.",
+          "- WITHOUT project_id the search is NOT limited to the current project. It spans",
+          "  every project readable by the authenticated account, so results may come from",
+          "  unrelated codebases and are not safe to import from. Only omit it deliberately,",
+          "  when the intent is to search broadly.",
+          "- Check the projectId on each result before acting on it.",
+          "",
           "Constraints:",
           "- Query must be 1–500 characters",
           "- Returns max 50 results per page",
           "- Use get_component_screenshot to view a result's screenshot image",
+          "- sourcePath is the component to import; storyPath is the .stories file it was captured from",
           "",
           "Failure modes:",
           "- RATE_LIMITED: Too many requests. Wait and retry.",
@@ -486,7 +499,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           query: z.string().min(1).max(MAX_QUERY_LENGTH).describe("Text search query (e.g. 'primary button', 'date picker', 'navigation bar')"),
           limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
           page: z.number().min(1).default(1).describe("Page number for pagination"),
-          project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+          project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe(
+            "Restrict results to one project. Look for it in the repository " +
+            "(.scry/config.json, .storybook-deployer.json, SCRY_PROJECT_ID) rather than " +
+            "asking the user. Omitting this searches EVERY project the account can read, " +
+            "not just the current one."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
