@@ -27,7 +27,16 @@ export function extractResultMetadata(jc: Record<string, unknown> | undefined) {
   return {
     description:
       typeof inspection.description === "string" ? inspection.description : undefined,
-    sourcePath: str("filepath", "source_path", "sourcePath", "import_path", "importPath"),
+    // Prefer the component's own file. `filepath` is the .stories file, so
+    // leading with it pointed agents one import short of the thing to use
+    // (ISSUES.md #6). Older rows have no componentFilePath and fall back.
+    sourcePath: str(
+      "componentFilePath", "component_file_path",
+      "source_path", "sourcePath", "import_path", "importPath",
+      "filepath",
+    ),
+    /** The .stories file the screenshot came from, when distinct. */
+    storyPath: str("filepath", "story_path", "storyPath"),
     storyTitle: str("storyTitle", "story_title"),
     variant: str("testName", "test_name", "storyName", "story_name"),
     figmaUrl: str("figma_url", "figmaUrl"),

@@ -360,6 +360,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // Source path is what makes a result actionable — an agent cannot import
       // the component without it, so keep it directly under the name.
       if (meta.sourcePath) lines.push(`   Source: ${meta.sourcePath}`);
+      if (meta.storyPath && meta.storyPath !== meta.sourcePath) {
+        lines.push(`   Story file: ${meta.storyPath}`);
+      }
       if (meta.storyTitle) {
         lines.push(meta.variant
           ? `   Story: ${meta.storyTitle} / ${meta.variant}`
@@ -387,6 +390,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         searchableText: r.searchable_text,
         description: meta.description,
         sourcePath: meta.sourcePath,
+        storyPath: meta.storyPath,
         storyTitle: meta.storyTitle,
         variant: meta.variant,
         figmaUrl: meta.figmaUrl,

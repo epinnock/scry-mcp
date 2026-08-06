@@ -7,7 +7,8 @@ import { extractResultMetadata } from "../src/utils/result-metadata";
  */
 const storybookJsonContent = {
   source_type: "storybook",
-  filepath: "./src/components/PricingCard.tsx",
+  filepath: "src/components/PricingCard.stories.tsx",
+  componentFilePath: "src/components/PricingCard.tsx",
   testName: "Recommended",
   storyTitle: "Components/PricingCard",
   screenshotPath: "images/components-pricingcard-recommended.png",
@@ -21,9 +22,19 @@ const storybookJsonContent = {
 };
 
 describe("extractResultMetadata", () => {
-  it("surfaces the source path a coding agent needs to import the component", () => {
+  // ISSUES.md #6: leading with `filepath` pointed agents at the .stories file,
+  // one import short of the component they were told to reuse.
+  it("prefers the component file over the story file as the source path", () => {
     const meta = extractResultMetadata(storybookJsonContent);
-    expect(meta.sourcePath).toBe("./src/components/PricingCard.tsx");
+    expect(meta.sourcePath).toBe("src/components/PricingCard.tsx");
+    expect(meta.storyPath).toBe("src/components/PricingCard.stories.tsx");
+  });
+
+  it("falls back to the story file for rows indexed before componentFilePath existed", () => {
+    const legacy = { ...storybookJsonContent };
+    delete (legacy as { componentFilePath?: string }).componentFilePath;
+    const meta = extractResultMetadata(legacy);
+    expect(meta.sourcePath).toBe("src/components/PricingCard.stories.tsx");
   });
 
   it("surfaces story title and variant separately", () => {
