@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { extractResultMetadata } from "./utils/result-metadata.js";
+import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -113,6 +114,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
    * The returned URL is publicly accessible (no auth required) until it expires.
    */
   private async getPresignedUrl(screenshotUrl: string): Promise<{ url: string; expiresAt: string } | null> {
+    // search_components returns presigned URLs in its structuredContent, and the
+    // tool description tells callers to feed a search result's screenshot_url
+    // back in here. Signing an already-signed URL fails, so an agent following
+    // the documented flow got SCREENSHOT_FETCH_FAILED (ISSUES.md #5). Pass those
+    // straight through — they are already fetchable.
+    if (isPresignedUrl(screenshotUrl)) {
+      return { url: screenshotUrl, expiresAt: presignedExpiry(screenshotUrl) };
+    }
+
     try {
       const response = await this.fetchWithTimeout(
         `${this.env.SCRY_SEARCH_API_URL}/api/image/presign`,
@@ -350,6 +360,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // Source path is what makes a result actionable — an agent cannot import
       // the component without it, so keep it directly under the name.
       if (meta.sourcePath) lines.push(`   Source: ${meta.sourcePath}`);
+      if (meta.storyPath && meta.storyPath !== meta.sourcePath) {
+        lines.push(`   Story file: ${meta.storyPath}`);
+      }
       if (meta.storyTitle) {
         lines.push(meta.variant
           ? `   Story: ${meta.storyTitle} / ${meta.variant}`
@@ -377,6 +390,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         searchableText: r.searchable_text,
         description: meta.description,
         sourcePath: meta.sourcePath,
+        storyPath: meta.storyPath,
         storyTitle: meta.storyTitle,
         variant: meta.variant,
         figmaUrl: meta.figmaUrl,
