@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { extractResultMetadata } from "./utils/result-metadata.js";
+import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError } from "./utils/search-errors.js";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -318,8 +319,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         json_content?: Record<string, unknown>;
         screenshot_url?: string;
         project_id?: string;
+        /** Set by the search API when the hit came from a different project. */
+        crossProject?: boolean;
       }>;
       pagination: { page: number; limit: number; total: number; total_pages?: number };
+      /** Which scope actually answered: "project" or "org". */
+      scope?: string;
+      /** True when the project found nothing and the search widened to the org. */
+      widenedToOrg?: boolean;
     };
 
     this.log("callSearchAPI", {
@@ -366,10 +373,18 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       const screenshotUrl = r.screenshot_url || meta.screenshotUrl;
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
+      // A bare project id tells an agent nothing about whether the component is
+      // reachable from the repo it is editing. Say it outright: a component in
+      // another team's app is findable but not necessarily importable, and a
+      // confident import of one produces a build error, not a missing feature.
+      if (r.crossProject) lines.push(CROSS_PROJECT_WARNING);
       return lines.join("\n");
     });
 
-    const summary = `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`;
+    const summary = withScopeNotice(
+      `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`,
+      data.widenedToOrg,
+    );
 
     // Build structuredContent for widget rendering — use presigned URLs for images
     const widgetResults = data.results.map((r, i) => {
