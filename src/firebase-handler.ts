@@ -28,6 +28,28 @@ function validateCSRFToken(formData: FormData, request: Request): boolean {
 // ----- Routes -----
 
 // GET /authorize — show the Firebase sign-in page (or auto-approve in dev)
+/**
+ * Health / readiness. Public on purpose.
+ *
+ * This lived in the OAuth provider's apiHandlers, which gate every route behind
+ * a bearer token — so it answered 401 to any uptime check, while its own comment
+ * claimed it was "useful for uptime monitoring". A health endpoint that requires
+ * a credential monitors nothing.
+ *
+ * It reports only liveness. Whether the pipeline actually works is a different
+ * question, answered by the end-to-end monitor rather than by a Worker asserting
+ * its own health — every incident this system has had reported success while
+ * broken.
+ */
+app.get("/health", (c) =>
+  c.json({
+    status: "ok",
+    server: "scry-mcp",
+    version: "1.0.0",
+    timestamp: new Date().toISOString(),
+  }),
+);
+
 app.get("/authorize", async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
   if (!oauthReqInfo.clientId) {
