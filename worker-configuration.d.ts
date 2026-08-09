@@ -11,6 +11,8 @@ declare namespace Cloudflare {
     GEMINI_API_KEY: string;        // Google Gemini API key for image generation
     COOKIE_ENCRYPTION_KEY: string;
     DEV_BYPASS_AUTH?: string;
+    /** Optional. When unset, Sentry initialises as a no-op rather than failing. */
+    SENTRY_DSN?: string;
     ASSETS: Fetcher;
   }
 }
