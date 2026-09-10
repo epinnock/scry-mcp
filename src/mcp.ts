@@ -5,7 +5,8 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { extractResultMetadata } from "./utils/result-metadata.js";
 import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
-import { classifySearchApiError } from "./utils/search-errors.js";
+import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
+import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-assertion.js";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -13,6 +14,7 @@ const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
 const RATE_LIMIT_RPM = 60;         // max requests per user per minute
 const MAX_QUERY_LENGTH = 500;      // max characters for text queries
 const MAX_PROJECT_ID_LENGTH = 128; // max characters for project_id filter
+const SEARCH_SCOPES = ["project", "org"] as const; // explicit scope; "project" never widens
 const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10MB max for base64 image input
 const MAX_PROMPT_LENGTH = 4000;                  // max characters for image generation prompt
 const IMAGE_GENERATION_TIMEOUT_MS = 60_000;      // 60s timeout — Gemini image gen takes 10-30s
@@ -75,6 +77,37 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     return true;
   }
 
+  // --- Caller identity for the search API (ISSUES.md #45) ---
+  // One Durable Object instance serves one user, so a per-instance cache of
+  // the short-lived assertion is per-user by construction.
+  private callerAssertion = new CallerAssertionCache();
+
+  /**
+   * Headers that tell the search API who this request is for.
+   *
+   * `X-Scry-Caller` is a signed, 60-second assertion of the Firebase uid; the
+   * search API verifies it before it trusts the subject. Throws when the
+   * signing secret is missing — sending nothing would make every search
+   * anonymous (public projects only) and hide the misconfiguration behind
+   * plausible-looking results.
+   *
+   * `X-User-Id` is the unsigned header this replaced. It is still sent during
+   * the rollout so a scry-nextjs deployment that predates the assertion, or one
+   * rolled back to it, keeps working under its ALLOW_LEGACY_USER_HEADER flag.
+   * The new deployment ignores it once that flag is off. Remove it after the
+   * flag is off everywhere.
+   */
+  private async callerHeaders(): Promise<Record<string, string>> {
+    const assertion = await this.callerAssertion.get(
+      this.env.SCRY_CALLER_ASSERTION_SECRET,
+      this.props.firebaseUid,
+    );
+    return {
+      [CALLER_ASSERTION_HEADER]: assertion,
+      "X-User-Id": this.props.firebaseUid,
+    };
+  }
+
   // --- Structured logging ---
   private log(tool: string, data: Record<string, unknown>) {
     console.log(JSON.stringify({
@@ -126,6 +159,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
 
     try {
+      // The presign route derives the owning project from the key and checks
+      // the caller against it, so it needs to know who the caller is.
       const response = await this.fetchWithTimeout(
         `${this.env.SCRY_SEARCH_API_URL}/api/image/presign`,
         {
@@ -133,16 +168,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
+            ...(await this.callerHeaders()),
           },
           body: JSON.stringify({ path: screenshotUrl, expires_in: 3600 }),
         }
       );
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+        this.log("getPresignedUrl", { status: response.status, success: false });
+        return null;
+      }
 
       const data = (await response.json()) as { url: string; expires_at: string };
       return { url: data.url, expiresAt: data.expires_at };
-    } catch {
+    } catch (err) {
+      // Includes a missing SCRY_CALLER_ASSERTION_SECRET: presigning is
+      // best-effort for thumbnails, but the cause must reach the logs.
+      this.log("getPresignedUrl", { error: String(err), success: false });
       return null;
     }
   }
@@ -284,6 +326,21 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async callSearchAPI(body: Record<string, unknown>) {
     const start = Date.now();
 
+    let callerHeaders: Record<string, string>;
+    try {
+      callerHeaders = await this.callerHeaders();
+    } catch (err) {
+      // Fail closed and say why. Searching without an identity would return
+      // public projects only, which looks like "no results" to the agent and
+      // hides a missing secret indefinitely.
+      this.log("callSearchAPI", { error: String(err), success: false });
+      return this.toolError(
+        "SERVER_MISCONFIGURED",
+        "The Scry MCP server cannot sign its caller assertion (SCRY_CALLER_ASSERTION_SECRET is not set). Ask the operator to configure it.",
+        false,
+      );
+    }
+
     const response = await this.fetchWithTimeout(
       `${this.env.SCRY_SEARCH_API_URL}/api/search`,
       {
@@ -291,7 +348,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
-          "X-User-Id": this.props.firebaseUid,
+          ...callerHeaders,
         },
         body: JSON.stringify(body),
       }
@@ -301,7 +358,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       const errorText = await response.text();
       this.log("callSearchAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
 
-      const { code: errorCode, retryable } = classifySearchApiError(response.status);
+      const { code: statusCode, retryable } = classifySearchApiError(response.status);
+      // Prefer the API's own code (INVALID_SCOPE, PROJECT_HAS_NO_ORG,
+      // PROJECT_REQUIRED, INVALID_CALLER_ASSERTION, ...) so the agent can
+      // branch on the cause rather than on a bare status.
+      const errorCode = upstreamErrorCode(errorText) ?? statusCode;
 
       return this.toolError(
         errorCode,
@@ -323,10 +384,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         crossProject?: boolean;
       }>;
       pagination: { page: number; limit: number; total: number; total_pages?: number };
-      /** Which scope actually answered: "project" or "org". */
+      /** The scope that answered — always the one requested. Absent without project_id. */
       scope?: string;
-      /** True when the project found nothing and the search widened to the org. */
+      /** True only when scope was "org" and rows from other projects are present. */
       widenedToOrg?: boolean;
+      /** Sibling projects left out of an org search, as counts only. */
+      excluded?: { not_discoverable?: number; unauthorised?: number };
     };
 
     this.log("callSearchAPI", {
@@ -383,7 +446,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     const summary = withScopeNotice(
       `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`,
-      data.widenedToOrg,
+      {
+        scope: data.scope,
+        widenedToOrg: data.widenedToOrg,
+        crossProjectCount: data.results.filter(r => r.crossProject).length,
+        resultCount: data.results.length,
+        excluded: data.excluded,
+      },
     );
 
     // Build structuredContent for widget rendering — use presigned URLs for images
@@ -404,6 +473,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         storybookUrl: meta.storybookUrl,
         tags: meta.tags,
         projectId: r.project_id,
+        crossProject: r.crossProject === true,
       };
     });
 
@@ -412,6 +482,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       structuredContent: {
         results: widgetResults,
         summary,
+        scope: data.scope,
+        widenedToOrg: data.widenedToOrg === true,
       },
     };
   }
@@ -493,10 +565,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "- You can usually find it without asking: look in the repository for",
           "  .scry/config.json, .storybook-deployer.json, or a SCRY_PROJECT_ID entry in .env",
           "  or CI config. Prefer reading it from the repo over asking the user for an ID.",
+          "- scope: 'project' (default) searches only project_id and NEVER widens — an empty",
+          "  result means this project has no match, not that the search fell back elsewhere.",
+          "- scope: 'org' also returns components from other projects in the same organisation,",
+          "  but only from projects whose owners opted in to discovery AND that this account can",
+          "  read. Those results are marked ⚠ and may not be importable from this repo. Use it",
+          "  deliberately, e.g. 'does this already exist anywhere in our design system?'.",
           "- WITHOUT project_id the search is NOT limited to the current project. It spans",
           "  every project readable by the authenticated account, so results may come from",
           "  unrelated codebases and are not safe to import from. Only omit it deliberately,",
-          "  when the intent is to search broadly.",
+          "  when the intent is to search broadly. scope: 'org' requires project_id.",
           "- Check the projectId on each result before acting on it.",
           "",
           "Constraints:",
@@ -508,7 +586,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Failure modes:",
           "- RATE_LIMITED: Too many requests. Wait and retry.",
           "- SEARCH_API_5xx: Upstream error. Retry once.",
-          "- VALIDATION_ERROR: Bad input. Fix parameters and retry.",
+          "- VALIDATION_ERROR / INVALID_SCOPE: Bad input. Fix parameters and retry.",
+          "- PROJECT_HAS_NO_ORG: scope 'org' on a project with no organisation. Use scope 'project'.",
+          "- PROJECT_REQUIRED: scope 'org' without project_id. Supply project_id.",
+          "- ACCESS_DENIED: the account cannot read project_id. Do not retry with other ids.",
+          "- SERVER_MISCONFIGURED / INVALID_CALLER_ASSERTION: server-side identity problem. Report it; do not retry.",
         ].join("\n"),
         inputSchema: {
           query: z.string().min(1).max(MAX_QUERY_LENGTH).describe("Text search query (e.g. 'primary button', 'date picker', 'navigation bar')"),
@@ -520,24 +602,30 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             "asking the user. Omitting this searches EVERY project the account can read, " +
             "not just the current one."
           ),
+          scope: z.enum(SEARCH_SCOPES).default("project").describe(
+            "'project' (default): only project_id, never widens. 'org': also include other " +
+            "projects in the same organisation that opted in to discovery and that you can read; " +
+            "their results are marked crossProject. Requires project_id."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ query, limit, page, project_id }) => {
+      async ({ query, limit, page, project_id, scope }) => {
         if (!this.checkRateLimit()) {
           this.log("search_components", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
-        this.log("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id });
+        this.log("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope });
 
         return this.callSearchAPI({
           text: query,
           limit,
           page,
           project_id,
+          scope,
         });
       }
     );
@@ -552,6 +640,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Uses image embeddings for visual similarity matching via Jina Embeddings v4.",
           "Can be combined with a text query for hybrid (text + visual) search.",
           "",
+          "Scope: same rules as search_components — scope 'project' (default) searches only",
+          "project_id and never widens; scope 'org' also returns opted-in, readable sibling",
+          "projects' components, marked ⚠. scope 'org' requires project_id.",
+          "",
           "Constraints:",
           "- Image must be base64-encoded PNG or JPG, under 10MB",
           "- Can include data URI prefix (data:image/png;base64,...) or raw base64",
@@ -560,6 +652,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Failure modes:",
           "- RATE_LIMITED: Too many requests. Wait and retry.",
           "- VALIDATION_ERROR: Image too large or invalid format.",
+          "- INVALID_SCOPE / PROJECT_HAS_NO_ORG / PROJECT_REQUIRED: fix scope or project_id.",
           "- SEARCH_API_5xx: Upstream error. Retry once.",
         ].join("\n"),
         inputSchema: {
@@ -568,12 +661,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           limit: z.number().min(1).max(50).default(10).describe("Max results to return (1–50)"),
           page: z.number().min(1).default(1).describe("Page number for pagination"),
           project_id: z.string().max(MAX_PROJECT_ID_LENGTH).optional().describe("Filter results to a specific project ID"),
+          scope: z.enum(SEARCH_SCOPES).default("project").describe(
+            "'project' (default): only project_id, never widens. 'org': also include opted-in, " +
+            "readable sibling projects; their results are marked crossProject. Requires project_id."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ image, query, limit, page, project_id }) => {
+      async ({ image, query, limit, page, project_id, scope }) => {
         if (!this.checkRateLimit()) {
           this.log("search_by_image", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
@@ -584,7 +681,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           return this.toolError("VALIDATION_ERROR", `Image too large (${(image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`, false);
         }
 
-        this.log("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page });
+        this.log("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope });
 
         return this.callSearchAPI({
           image,
@@ -592,6 +689,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           limit,
           page,
           project_id,
+          scope,
         });
       }
     );

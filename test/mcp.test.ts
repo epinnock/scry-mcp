@@ -36,9 +36,9 @@ describe("MCP Tools", () => {
       // Assert fetch was called with:
       //   - POST method
       //   - Content-Type: application/json
-      //   - X-User-Id header matching firebaseUid
+      //   - X-Scry-Caller header: HS256 JWT over SCRY_CALLER_ASSERTION_SECRET with sub=firebaseUid
       //   - Authorization: Bearer <SCRY_SEARCH_API_KEY>
-      //   - Body: { text: "button", limit: 5, page: 1 }
+      //   - Body: { text: "button", limit: 5, page: 1, scope: "project" }
     it.todo("calls the Scry search API with text query and auth headers");
 
           // Mock fetch to return 500

@@ -8,6 +8,13 @@ declare namespace Cloudflare {
     FIREBASE_PROJECT_ID: string;
     SCRY_SEARCH_API_URL: string;   // Base URL for the Scry Next.js search API (e.g. https://scry.example.com)
     SCRY_SEARCH_API_KEY: string;   // API key for authenticating to the search API
+    /**
+     * Secret shared with scry-nextjs (its SCRY_CALLER_ASSERTION_SECRET) that
+     * signs the X-Scry-Caller assertion carrying the user's uid. Optional in the
+     * type because a worker can be deployed without it; the search tools then
+     * fail closed with SERVER_MISCONFIGURED rather than searching anonymously.
+     */
+    SCRY_CALLER_ASSERTION_SECRET?: string;
     GEMINI_API_KEY: string;        // Google Gemini API key for image generation
     COOKIE_ENCRYPTION_KEY: string;
     DEV_BYPASS_AUTH?: string;
