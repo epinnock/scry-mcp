@@ -85,17 +85,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   /**
    * Headers that tell the search API who this request is for.
    *
-   * `X-Scry-Caller` is a signed, 60-second assertion of the Firebase uid; the
-   * search API verifies it before it trusts the subject. Throws when the
-   * signing secret is missing — sending nothing would make every search
-   * anonymous (public projects only) and hide the misconfiguration behind
-   * plausible-looking results.
-   *
-   * `X-User-Id` is the unsigned header this replaced. It is still sent during
-   * the rollout so a scry-nextjs deployment that predates the assertion, or one
-   * rolled back to it, keeps working under its ALLOW_LEGACY_USER_HEADER flag.
-   * The new deployment ignores it once that flag is off. Remove it after the
-   * flag is off everywhere.
+   * `X-Scry-Caller` is a signed, 60-second assertion of the Firebase uid, and
+   * the only identity channel: the search API no longer reads the unsigned
+   * `X-User-Id` header, so this assertion is what it verifies before it trusts
+   * the subject. Throws when the signing secret is missing — sending nothing
+   * would make every search anonymous (public projects only) and hide the
+   * misconfiguration behind plausible-looking results.
    */
   private async callerHeaders(): Promise<Record<string, string>> {
     const assertion = await this.callerAssertion.get(
@@ -104,7 +99,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     );
     return {
       [CALLER_ASSERTION_HEADER]: assertion,
-      "X-User-Id": this.props.firebaseUid,
     };
   }
 

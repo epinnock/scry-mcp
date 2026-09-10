@@ -98,10 +98,10 @@ COOKIE_ENCRYPTION_KEY=any-random-string-for-dev
 
 `SCRY_SEARCH_API_KEY` is transport auth: it proves a request came from this
 worker. `SCRY_CALLER_ASSERTION_SECRET` signs the short-lived `X-Scry-Caller`
-JWT that tells the search API *which user* the worker is acting for; the search
-API verifies it with the same secret before it trusts the uid. Without the
-secret the search tools return `SERVER_MISCONFIGURED` rather than searching
-anonymously.
+JWT that tells the search API *which user* the worker is acting for; it is the
+only channel that carries the uid, and the search API verifies it with the same
+secret before it trusts the uid. Without the secret the search tools return
+`SERVER_MISCONFIGURED` rather than searching anonymously.
 
 ### 3. KV configuration
 
@@ -270,7 +270,7 @@ Claude Desktop        mcp-remote          Worker              Firebase
 - **Request timeouts**: 30s `AbortController` timeout on all upstream calls.
 - **Input validation**: Zod schemas enforce query length (500 chars), image size (10MB), project ID length (128 chars).
 - **Presigned URLs**: Time-limited (1 hour), generated server-side. R2 credentials never leave the Next.js service. The presign request carries the caller assertion, so the Next.js service signs only keys the user may read.
-- **Caller identity**: the worker sends `X-Scry-Caller`, an HS256 JWT over `SCRY_CALLER_ASSERTION_SECRET` (`{sub: uid, aud: "scry-search", iat, exp ≤ 60s}`), so the shared `SCRY_SEARCH_API_KEY` cannot be used to impersonate a user. The unsigned `X-User-Id` header is still sent during the rollout for compatibility with the search API's transition flag and is ignored once that flag is off.
+- **Caller identity**: the worker sends `X-Scry-Caller`, an HS256 JWT over `SCRY_CALLER_ASSERTION_SECRET` (`{sub: uid, aud: "scry-search", iat, exp ≤ 60s}`), so the shared `SCRY_SEARCH_API_KEY` cannot be used to impersonate a user. This assertion is the only identity channel: the search API's transition flag is gone, the unsigned `X-User-Id` header is no longer read there, and the worker no longer sends it.
 - **Search scope**: explicit `scope` on both search tools, default `project`, which never widens. `org` returns another project's rows only when that project opted in (`discoverableByOrg`) and the user can read it.
 
 ## Available Scripts

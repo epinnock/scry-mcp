@@ -13,6 +13,10 @@ import { SignJWT } from "jose";
  * the search API — `{sub: firebaseUid, aud: "scry-search", iss: "scry-mcp",
  * iat, exp, jti}` — and sends it as `X-Scry-Caller`. The search API verifies
  * the signature, the audience and the age before it trusts the subject.
+ *
+ * This assertion is now the only identity channel. The search API dropped its
+ * transition flag and no longer reads `X-User-Id`, so the worker stopped
+ * sending it: an unsigned uid would be ignored upstream either way.
  */
 
 export const CALLER_ASSERTION_HEADER = "X-Scry-Caller";
