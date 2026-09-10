@@ -65,7 +65,7 @@ scry-mcp/
 
 ## Prerequisites
 
-- Node.js v20+
+- Node.js v22+
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up)
 - A [Firebase project](https://console.firebase.google.com) with Authentication enabled
 - The Scry Next.js search API running (provides `/api/search` and `/api/image/presign`)
@@ -95,14 +95,11 @@ SCRY_SEARCH_API_KEY=your-search-api-key
 COOKIE_ENCRYPTION_KEY=any-random-string-for-dev
 ```
 
-### 3. Create the KV namespace
+### 3. KV configuration
 
-```bash
-npx wrangler kv namespace create "OAUTH_KV"
-npx wrangler kv namespace create "OAUTH_KV" --preview
-```
-
-Copy the returned `id` and `preview_id` into `wrangler.jsonc`.
+The production and staging KV namespaces already exist and are configured in
+`wrangler.jsonc`. Local development uses Wrangler's local KV emulator; no cloud
+namespace creation is needed.
 
 ### 4. Start the dev server
 
@@ -141,37 +138,55 @@ npm run verify
 
 ## Deployment
 
-### 1. Set secrets
+The shared workflow is `.github/workflows/deploy.yml`, using Node 22 and Wrangler
+4.72.0 (the lockfile version). PRs targeting `stage` or `main` run typecheck,
+lint, widget build and tests without deploying. Feature PRs target `stage`;
+promotion advances `main` to the tested staging commit.
 
-```bash
-npx wrangler secret put FIREBASE_API_KEY
-npx wrangler secret put FIREBASE_AUTH_DOMAIN
-npx wrangler secret put FIREBASE_PROJECT_ID
-npx wrangler secret put SCRY_SEARCH_API_URL
-npx wrangler secret put SCRY_SEARCH_API_KEY
-npx wrangler secret put COOKIE_ENCRYPTION_KEY    # generate with: openssl rand -hex 32
-```
+| Branch | Environment | Worker URL | Wrangler target |
+|--------|-------------|------------|-----------------|
+| `stage` | staging | https://scry-mcp-staging.epinnock.workers.dev | `--env staging` |
+| `main` | production | https://scry-mcp.epinnock.workers.dev | top-level (no `--env`) |
 
-### 2. Deploy
+Pushes to these branches deploy after checks pass; Markdown and `docs/**` changes
+alone do not trigger push CI. Use the workflow's `environment` choice for a manual
+run, selecting the branch whose commit should deploy. Deployments are serialized
+per ref and include the Phase 0 commit, branch, build time, run ID, actor and Sentry
+release stamps. The smoke gate retries `/healthz` six times at 10-second intervals
+until its commit matches the run SHA, then requires unauthenticated `/mcp` to return
+401 and `/.well-known/oauth-authorization-server` to return 200.
 
-```bash
-npx wrangler deploy
-```
+For an authorized manual deploy, `npm run deploy:staging` selects staging and
+`npm run deploy:production` (or `npm run deploy`) retains the existing production
+worker and stamp flags. Production intentionally has no `env.production` block;
+use a top-level deploy/dry-run, not `--env production`.
 
-Your server is live at `https://scry-mcp.<your-account>.workers.dev/mcp`.
+After this Phase 1 change merges, create `stage` from the updated `main` and push
+it to trigger the first staging deploy. CI reuses the repository's existing
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. GitHub deployment environments
+are `staging` and `production`, with their respective worker URLs. The existing
+`staging-OAUTH_KV` namespace is reused, and Wrangler applies migration `v1` to the
+new worker's `ScryMCP` Durable Object; no KV creation or manual DO migration is
+needed. Staging uses workers.dev and has no custom routes.
 
-### 3. Verify deployment
+Phase 1 health and OAuth smoke checks work without worker secrets: health reads
+only stamp vars, the provider builds metadata from the request origin and endpoint
+configuration, and missing bearer auth returns 401 before accessing KV or services.
+Firebase sign-in, search and image generation need Phase 2 configuration:
 
-```bash
-# Health check
-curl https://scry-mcp.<your-account>.workers.dev/health
+- Add staging `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, and `FIREBASE_PROJECT_ID`
+  for `scry-dev-dashboard-stage`.
+- Set `SCRY_SEARCH_API_URL` to the scry-nextjs stable stage alias and
+  `SCRY_SEARCH_API_KEY` to its stage-only API key.
+- Add a staging `COOKIE_ENCRYPTION_KEY`, `GEMINI_API_KEY` for image generation,
+  and optionally `SENTRY_DSN` for error reporting. In Phase 2, use
+  `wrangler secret put <NAME> --env staging`; production secrets remain top-level.
+- In the staging Firebase console, authorize
+  `scry-mcp-staging.epinnock.workers.dev` and enable the intended sign-in providers
+  (Google and email/password alongside GitHub).
 
-# OAuth metadata
-curl https://scry-mcp.<your-account>.workers.dev/.well-known/oauth-authorization-server
-
-# Should return 401
-curl -s -o /dev/null -w "%{http_code}" https://scry-mcp.<your-account>.workers.dev/mcp
-```
+Do not enable `DEV_BYPASS_AUTH` on deployed workers. Full authenticated staging
+verification follows in Phase 2 after those secrets and Firebase settings exist.
 
 ## Firebase Setup
 
@@ -246,7 +261,8 @@ Claude Desktop        mcp-remote          Worker              Firebase
 | Script | Description |
 |--------|-------------|
 | `npm run dev` | Start local dev server |
-| `npm run deploy` | Deploy to Cloudflare |
+| `npm run deploy` / `npm run deploy:production` | Stamped production deploy |
+| `npm run deploy:staging` | Stamped staging deploy |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run lint` | ESLint |
 | `npm test` | Run unit + integration tests |

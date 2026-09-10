@@ -28,6 +28,8 @@ describe("E2E: MCP Server endpoints", () => {
       service: "scry-mcp",
       commit: expect.any(String),
       version: expect.any(String),
+      ...(process.env.MCP_TEST_ENV && { env: process.env.MCP_TEST_ENV }),
+      ...(process.env.MCP_TEST_COMMIT && { commit: process.env.MCP_TEST_COMMIT }),
     });
   });
 
@@ -48,6 +50,9 @@ describe("E2E: MCP Server endpoints", () => {
     expect(body).toHaveProperty("registration_endpoint");
     expect(body.authorization_endpoint).toContain("/authorize");
     expect(body.token_endpoint).toContain("/token");
+    expect(new URL(body.authorization_endpoint).origin).toBe(new URL(BASE_URL).origin);
+    expect(new URL(body.token_endpoint).origin).toBe(new URL(BASE_URL).origin);
+    expect(new URL(body.registration_endpoint).origin).toBe(new URL(BASE_URL).origin);
   });
 
   it("POST /register allows dynamic client registration", async () => {
