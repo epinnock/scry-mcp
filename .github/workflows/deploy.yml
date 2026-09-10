@@ -1,17 +1,17 @@
 name: Deploy Scry MCP
 
-# scry-mcp is the OAuth boundary for the MCP server, and until now it was the
-# only service in the fleet without CI — every deploy was run by hand from a
-# developer machine. Tests gate deploys here the same way they do in
-# scry-build-processing-service and scry-cdn-service.
+# PRs validate only. Pushes to stage/main deploy staging/production.
 
 on:
   pull_request:
     branches:
       - main
+      - stage
   push:
     branches:
       - main
+      - stage
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
     inputs:
       environment:
@@ -20,7 +20,12 @@ on:
         default: 'production'
         type: choice
         options:
+          - staging
           - production
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -33,7 +38,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       # This repo uses npm (package-lock.json), unlike the pnpm services.
@@ -58,17 +63,19 @@ jobs:
       - name: Run Tests
         run: npm test
 
-  deploy-production:
+  deploy:
     runs-on: ubuntu-latest
-    name: Deploy to Production
+    name: Deploy
     needs: test
-    environment: production
-    # No staging deploy: wrangler.jsonc defines a single worker with no `env`
-    # blocks, and a staging environment would need its own KV namespace and
-    # Durable Object migration. Add those first if staging is wanted.
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref == 'refs/heads/stage' && 'staging' || 'production') }}
+      url: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' || github.event_name == 'push' && github.ref == 'refs/heads/stage') && 'https://scry-mcp-staging.epinnock.workers.dev' || 'https://scry-mcp.epinnock.workers.dev' }}
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stage')) ||
+      github.event_name == 'workflow_dispatch'
+    env:
+      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.ref == 'refs/heads/stage' && 'staging' || 'production') }}
+      BASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' || github.event_name == 'push' && github.ref == 'refs/heads/stage') && 'https://scry-mcp-staging.epinnock.workers.dev' || 'https://scry-mcp.epinnock.workers.dev' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -76,7 +83,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install Dependencies
@@ -87,13 +94,16 @@ jobs:
         run: echo "SCRY_BUILD_TIME=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
 
       # wrangler runs `npm run build:widgets` itself via the build.command hook.
-      - name: Deploy Worker (Production)
+      # Production intentionally uses the top-level config and existing worker.
+      - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
+          wranglerVersion: '4.72.0'
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: >-
-            deploy
+            deploy ${{ env.DEPLOY_ENV == 'staging' && '--env staging' || '' }}
+            --var SCRY_ENV:${{ env.DEPLOY_ENV }}
             --var SCRY_COMMIT:${{ github.sha }}
             --var SCRY_BRANCH:${{ github.ref_name }}
             --var SCRY_BUILD_TIME:${{ env.SCRY_BUILD_TIME }}
@@ -105,13 +115,13 @@ jobs:
 
       # Cheap post-deploy assertion that the OAuth boundary still behaves:
       # /mcp must challenge (401) and the metadata document must stay public.
+      # These public endpoints need no secrets, including on first staging deploy.
       # A worker that boots but answers 500 here is a failed deploy.
       - name: Smoke Test Health and OAuth Endpoints
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          BASE=https://scry-mcp.epinnock.workers.dev
           for attempt in {1..6}; do
             if health=$(curl -fsS --max-time 30 "$BASE/healthz") &&
                jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit' <<< "$health" > /dev/null; then
@@ -136,6 +146,6 @@ jobs:
         run: |
           echo "## Deployment Successful" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Worker:** scry-mcp" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** $BASE" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** $DEPLOY_ENV" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

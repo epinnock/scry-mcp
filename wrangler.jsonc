@@ -31,6 +31,34 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ScryMCP"] }
   ],
+  "env": {
+    "staging": {
+      "name": "scry-mcp-staging",
+      "workers_dev": true,
+      "routes": [],
+      "vars": {
+        "SCRY_ENV": "staging"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "OAUTH_KV",
+          "id": "8fd3a345500f415a82a5da47b4ae79f1",
+          "preview_id": "8fd3a345500f415a82a5da47b4ae79f1"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "MCP_OBJECT",
+            "class_name": "ScryMCP"
+          }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ScryMCP"] }
+      ]
+    }
+  },
   "observability": {
     "logs": {
       "enabled": true,
