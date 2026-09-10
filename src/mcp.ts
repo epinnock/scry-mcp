@@ -2,7 +2,11 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
-import { extractResultMetadata } from "./utils/result-metadata.js";
+import {
+  extractProvenance,
+  extractResultMetadata,
+  formatProvenanceLine,
+} from "./utils/result-metadata.js";
 import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
@@ -376,6 +380,17 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         project_id?: string;
         /** Set by the search API when the hit came from a different project. */
         crossProject?: boolean;
+        /**
+         * Provenance and freshness, decided by the search API (P13a). Every
+         * member is absent when unknown; none is ever inferred here.
+         */
+        build_id?: string;
+        build_sha?: string;
+        story_id?: string;
+        indexed_at?: string;
+        latest_build_id?: string;
+        freshness?: string;
+        freshness_reason?: string;
       }>;
       pagination: { page: number; limit: number; total: number; total_pages?: number };
       /** The scope that answered — always the one requested. Absent without project_id. */
@@ -427,6 +442,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
       if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
       if (meta.tags?.length) lines.push(`   Tags: ${meta.tags.join(", ")}`);
+      // Which build this came from and whether it is the current one. Always
+      // rendered, including as "build unknown · unknown": a result an agent
+      // cannot date is a result it should not treat as current, and silence
+      // reads as currency (roadmap-open-questions-code-answers.md B.1).
+      lines.push(`   ${formatProvenanceLine(extractProvenance(r as unknown as Record<string, unknown>))}`);
       const screenshotUrl = r.screenshot_url || meta.screenshotUrl;
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
@@ -452,6 +472,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // Build structuredContent for widget rendering — use presigned URLs for images
     const widgetResults = data.results.map((r, i) => {
       const meta = extractResultMetadata(r.json_content as Record<string, unknown> | undefined);
+      const provenance = extractProvenance(r as unknown as Record<string, unknown>);
       return {
         name: r.component_name || r.id,
         score: r.score,
@@ -468,6 +489,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         tags: meta.tags,
         projectId: r.project_id,
         crossProject: r.crossProject === true,
+        // Same values the text output renders, unrolled so a widget does not
+        // have to parse a sentence. Absent members stay absent.
+        buildId: provenance.buildId,
+        buildSha: provenance.buildSha,
+        storyId: provenance.storyId,
+        indexedAt: provenance.indexedAt,
+        latestBuildId: provenance.latestBuildId,
+        freshness: provenance.freshness,
+        freshnessReason: provenance.freshnessReason,
       };
     });
 
