@@ -17,6 +17,7 @@ export { ScryMCP };
 export default Sentry.withSentry(
   (env: Env) => ({
     dsn: env.SENTRY_DSN,
+    release: env.SENTRY_RELEASE,
     dataCollection: { httpBodies: [] },
   }),
   new OAuthProvider({

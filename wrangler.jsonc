@@ -3,6 +3,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "SCRY_ENV": "production"
+  },
   "build": {
     "command": "npm run build:widgets"
   },
