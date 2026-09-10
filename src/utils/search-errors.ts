@@ -20,3 +20,25 @@ export function classifySearchApiError(status: number): SearchApiError {
   // will fail again identically.
   return { code: `SEARCH_API_${status}`, retryable: status >= 500 };
 }
+
+/**
+ * The search API now returns machine-readable codes alongside its message
+ * (`{error, code}` — e.g. `project_has_no_org`, `invalid_scope`,
+ * `project_required`, `invalid_caller_assertion`). Surface them verbatim, in
+ * this server's UPPER_SNAKE convention, so an agent can branch on them
+ * instead of on a generic SEARCH_API_400.
+ *
+ * Returns undefined for a body that is not JSON, has no `code`, or whose code
+ * is not a plain identifier — the status-derived code then stands.
+ */
+export function upstreamErrorCode(bodyText: string): string | undefined {
+  try {
+    const parsed = JSON.parse(bodyText) as { code?: unknown };
+    const code = parsed?.code;
+    if (typeof code !== "string") return undefined;
+    if (!/^[a-z][a-z0-9_]{0,63}$/i.test(code)) return undefined;
+    return code.toUpperCase();
+  } catch {
+    return undefined;
+  }
+}

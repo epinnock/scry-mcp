@@ -33,8 +33,8 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 
 | Tool | Description |
 |------|-------------|
-| `search_components` | Text-based semantic + keyword hybrid search over UI components |
-| `search_by_image` | Visual similarity search using base64 image input |
+| `search_components` | Text-based semantic + keyword hybrid search over UI components. `scope: "project"` (default) never widens; `scope: "org"` also returns opted-in, readable sibling projects' rows, marked `crossProject` |
+| `search_by_image` | Visual similarity search using base64 image input; same `scope` semantics |
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `whoami` | Returns the authenticated user's info |
 
@@ -92,8 +92,16 @@ FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 FIREBASE_PROJECT_ID=your-project-id
 SCRY_SEARCH_API_URL=http://localhost:3000
 SCRY_SEARCH_API_KEY=your-search-api-key
+SCRY_CALLER_ASSERTION_SECRET=same-value-as-scry-nextjs-SCRY_CALLER_ASSERTION_SECRET
 COOKIE_ENCRYPTION_KEY=any-random-string-for-dev
 ```
+
+`SCRY_SEARCH_API_KEY` is transport auth: it proves a request came from this
+worker. `SCRY_CALLER_ASSERTION_SECRET` signs the short-lived `X-Scry-Caller`
+JWT that tells the search API *which user* the worker is acting for; the search
+API verifies it with the same secret before it trusts the uid. Without the
+secret the search tools return `SERVER_MISCONFIGURED` rather than searching
+anonymously.
 
 ### 3. KV configuration
 
@@ -178,6 +186,13 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   for `scry-dev-dashboard-stage`.
 - Set `SCRY_SEARCH_API_URL` to the scry-nextjs stable stage alias and
   `SCRY_SEARCH_API_KEY` to its stage-only API key.
+- Set `SCRY_CALLER_ASSERTION_SECRET` to the same value as the scry-nextjs Preview
+  deployment's `SCRY_CALLER_ASSERTION_SECRET` (`wrangler secret put
+  SCRY_CALLER_ASSERTION_SECRET --env staging`; production is top-level,
+  `wrangler secret put SCRY_CALLER_ASSERTION_SECRET`). Generate a distinct value
+  per environment with `openssl rand -base64 48`. Set it on scry-nextjs first,
+  with its `ALLOW_LEGACY_USER_HEADER=true` transition flag on, then deploy the
+  worker, then turn the flag off.
 - Add a staging `COOKIE_ENCRYPTION_KEY`, `GEMINI_API_KEY` for image generation,
   and optionally `SENTRY_DSN` for error reporting. In Phase 2, use
   `wrangler secret put <NAME> --env staging`; production secrets remain top-level.
@@ -254,7 +269,9 @@ Claude Desktop        mcp-remote          Worker              Firebase
 - **Rate limiting**: 60 requests/minute per user (sliding window in Durable Object).
 - **Request timeouts**: 30s `AbortController` timeout on all upstream calls.
 - **Input validation**: Zod schemas enforce query length (500 chars), image size (10MB), project ID length (128 chars).
-- **Presigned URLs**: Time-limited (1 hour), generated server-side. R2 credentials never leave the Next.js service.
+- **Presigned URLs**: Time-limited (1 hour), generated server-side. R2 credentials never leave the Next.js service. The presign request carries the caller assertion, so the Next.js service signs only keys the user may read.
+- **Caller identity**: the worker sends `X-Scry-Caller`, an HS256 JWT over `SCRY_CALLER_ASSERTION_SECRET` (`{sub: uid, aud: "scry-search", iat, exp ≤ 60s}`), so the shared `SCRY_SEARCH_API_KEY` cannot be used to impersonate a user. The unsigned `X-User-Id` header is still sent during the rollout for compatibility with the search API's transition flag and is ignored once that flag is off.
+- **Search scope**: explicit `scope` on both search tools, default `project`, which never widens. `org` returns another project's rows only when that project opted in (`discoverableByOrg`) and the user can read it.
 
 ## Available Scripts
 

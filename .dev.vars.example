@@ -8,3 +8,8 @@ SCRY_SEARCH_API_URL=http://localhost:3000
 SCRY_SEARCH_API_KEY=your-dev-search-api-key
 COOKIE_ENCRYPTION_KEY=any-random-string-for-dev
 GEMINI_API_KEY=your-gemini-api-key
+
+# Signs the X-Scry-Caller assertion that tells the search API which user a request
+# is for. Must equal scry-nextjs's SCRY_CALLER_ASSERTION_SECRET for the same
+# environment. Generate with: openssl rand -base64 48
+SCRY_CALLER_ASSERTION_SECRET=
