@@ -41,14 +41,24 @@ function validateCSRFToken(formData: FormData, request: Request): boolean {
  * its own health — every incident this system has had reported success while
  * broken.
  */
-app.get("/health", (c) =>
-  c.json({
+app.on("GET", ["/health", "/healthz"], (c) => {
+  const commit = c.env.SCRY_COMMIT ?? "dev";
+  c.header("Cache-Control", "no-store");
+  return c.json({
+    ok: true,
+    service: "scry-mcp",
+    env: c.env.SCRY_ENV ?? "dev",
+    commit,
+    branch: c.env.SCRY_BRANCH ?? null,
+    builtAt: c.env.SCRY_BUILD_TIME ?? null,
+    deployId: c.env.SCRY_DEPLOY_ID ?? null,
+    actor: c.env.SCRY_ACTOR ?? null,
     status: "ok",
     server: "scry-mcp",
-    version: "1.0.0",
+    version: commit,
     timestamp: new Date().toISOString(),
-  }),
-);
+  });
+});
 
 app.get("/authorize", async (c) => {
   const oauthReqInfo = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);

@@ -1,3 +1,6 @@
+# Local deploy stamp
+SCRY_ENV="dev"
+
 FIREBASE_API_KEY=your-dev-api-key
 FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
 FIREBASE_PROJECT_ID=your-project-id

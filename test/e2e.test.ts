@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 declare const process: { env: Record<string, string | undefined> };
-const BASE_URL = process.env.MCP_TEST_URL ?? "http://localhost:8787";
+const BASE_URL = process.env.MCP_TEST_URL ?? "http://127.0.0.1:8787";
 
 interface OAuthMetadata {
   authorization_endpoint: string;
@@ -19,10 +19,16 @@ describe("E2E: MCP Server endpoints", () => {
     expect(res.status).toBeLessThan(500);
   });
 
-  it("GET /health behind OAuth returns 401 without token", async () => {
-    const res = await fetch(`${BASE_URL}/health`);
-    // /health is an apiHandler behind the OAuthProvider, so it requires auth
-    expect(res.status).toBe(401);
+  it.each(["/health", "/healthz"])("GET %s returns a public deploy stamp", async (path) => {
+    const res = await fetch(`${BASE_URL}${path}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      service: "scry-mcp",
+      commit: expect.any(String),
+      version: expect.any(String),
+    });
   });
 
   it("GET /mcp without auth returns 401", async () => {
@@ -49,7 +55,7 @@ describe("E2E: MCP Server endpoints", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        redirect_uris: ["http://localhost:33333/callback"],
+        redirect_uris: ["http://127.0.0.1:33333/callback"],
         client_name: "e2e-test-client",
         token_endpoint_auth_method: "none",
       }),
@@ -73,7 +79,7 @@ describe("E2E: MCP Server endpoints", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        redirect_uris: ["http://localhost:33333/callback"],
+        redirect_uris: ["http://127.0.0.1:33333/callback"],
         client_name: "e2e-login-test",
         token_endpoint_auth_method: "none",
       }),
@@ -82,7 +88,7 @@ describe("E2E: MCP Server endpoints", () => {
 
     const authUrl = new URL(`${BASE_URL}/authorize`);
     authUrl.searchParams.set("client_id", client_id);
-    authUrl.searchParams.set("redirect_uri", "http://localhost:33333/callback");
+    authUrl.searchParams.set("redirect_uri", "http://127.0.0.1:33333/callback");
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("code_challenge", "test-challenge");
     authUrl.searchParams.set("code_challenge_method", "S256");

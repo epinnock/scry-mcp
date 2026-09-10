@@ -82,21 +82,48 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      # Evaluate the timestamp in a shell before passing it to wrangler-action.
+      - name: Set Build Time
+        run: echo "SCRY_BUILD_TIME=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+
       # wrangler runs `npm run build:widgets` itself via the build.command hook.
       - name: Deploy Worker (Production)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: >-
+            deploy
+            --var SCRY_COMMIT:${{ github.sha }}
+            --var SCRY_BRANCH:${{ github.ref_name }}
+            --var SCRY_BUILD_TIME:${{ env.SCRY_BUILD_TIME }}
+            --var SCRY_DEPLOY_ID:${{ github.run_id }}
+            --var SCRY_ACTOR:${{ github.actor }}
+            --var SENTRY_RELEASE:${{ github.sha }}
+            --tag ${{ github.sha }}
+            --message "${{ github.ref_name }} ${{ github.actor }} run=${{ github.run_id }}"
 
       # Cheap post-deploy assertion that the OAuth boundary still behaves:
       # /mcp must challenge (401) and the metadata document must stay public.
       # A worker that boots but answers 500 here is a failed deploy.
-      - name: Smoke Test OAuth Endpoints
+      - name: Smoke Test Health and OAuth Endpoints
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           BASE=https://scry-mcp.epinnock.workers.dev
+          for attempt in {1..6}; do
+            if health=$(curl -fsS --max-time 30 "$BASE/healthz") &&
+               jq -e --arg commit "$EXPECTED_COMMIT" '.commit == $commit' <<< "$health" > /dev/null; then
+              break
+            fi
+            if [ "$attempt" = "6" ]; then
+              echo "::error::/healthz did not report commit $EXPECTED_COMMIT after 6 attempts"
+              exit 1
+            fi
+            echo "Waiting for /healthz to report commit $EXPECTED_COMMIT (attempt $attempt/6)"
+            sleep 10
+          done
           mcp=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$BASE/mcp")
           meta=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
                    "$BASE/.well-known/oauth-authorization-server")
