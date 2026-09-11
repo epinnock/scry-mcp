@@ -11,6 +11,7 @@ import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js"
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-assertion.js";
+import { searchApiHeaders } from "./search-api-headers";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -125,6 +126,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     };
   }
 
+  /** Transport headers for every call to the search API; see search-api-headers.ts. */
+  private searchApiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return searchApiHeaders(this.env, extra);
+  }
+
   // --- Fetch with timeout ---
   // Wraps fetch with an AbortController timeout to prevent hanging on slow upstreams.
   private async fetchWithTimeout(
@@ -163,11 +169,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         `${this.env.SCRY_SEARCH_API_URL}/api/image/presign`,
         {
           method: "POST",
-          headers: {
+          headers: this.searchApiHeaders({
             "Content-Type": "application/json",
-            Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
             ...(await this.callerHeaders()),
-          },
+          }),
           body: JSON.stringify({ path: screenshotUrl, expires_in: 3600 }),
         }
       );
@@ -299,10 +304,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         `${this.env.SCRY_SEARCH_API_URL}/api/image/upload`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
-          },
+          headers: this.searchApiHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ key, data: base64, mimeType }),
         },
       );
@@ -343,11 +345,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       `${this.env.SCRY_SEARCH_API_URL}/api/search`,
       {
         method: "POST",
-        headers: {
+        headers: this.searchApiHeaders({
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this.env.SCRY_SEARCH_API_KEY}`,
           ...callerHeaders,
-        },
+        }),
         body: JSON.stringify(body),
       }
     );

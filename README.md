@@ -185,7 +185,15 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
 - Add staging `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, and `FIREBASE_PROJECT_ID`
   for `scry-dev-dashboard-stage`.
 - Set `SCRY_SEARCH_API_URL` to the scry-nextjs stable stage alias and
-  `SCRY_SEARCH_API_KEY` to its stage-only API key.
+  `SCRY_SEARCH_API_KEY` to its stage-only API key. Store that key on Vercel as a
+  plain encrypted Preview variable, not a sensitive one: sensitive values cannot
+  be read back, and the promotion smoke check (`scry-management/smoke-search.py`)
+  pulls it with `vercel env pull`.
+- Set `SCRY_SEARCH_API_BYPASS_TOKEN` to the scry-nextjs project's Protection Bypass
+  for Automation token. The stage alias is behind Vercel Deployment Protection and
+  answers a bare worker request with a login page; the worker sends the token as
+  `x-vercel-protection-bypass` only when this secret exists. Production has no such
+  secret and sends no header.
 - Set `SCRY_CALLER_ASSERTION_SECRET` to the same value as the scry-nextjs Preview
   deployment's `SCRY_CALLER_ASSERTION_SECRET` (`wrangler secret put
   SCRY_CALLER_ASSERTION_SECRET --env staging`; production is top-level,
