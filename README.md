@@ -153,8 +153,16 @@ promotion advances `main` to the tested staging commit.
 
 | Branch | Environment | Worker URL | Wrangler target |
 |--------|-------------|------------|-----------------|
-| `stage` | staging | https://scry-mcp-staging.epinnock.workers.dev | `--env staging` |
-| `main` | production | https://scry-mcp.epinnock.workers.dev | top-level (no `--env`) |
+| `stage` | staging | https://mcp-stage.scrymore.com | `--env staging` |
+| `main` | production | https://mcp.scrymore.com | top-level (no `--env`) |
+
+The connector URL is `https://mcp.scrymore.com/mcp` (staging:
+`https://mcp-stage.scrymore.com/mcp`). The `*.epinnock.workers.dev` names are the
+same workers and still resolve; they are not being retired. Each scrymore.com
+hostname is a Workers custom domain **and** an explicit `<host>/*` route, because
+`scry-cdn-service` owns a `*.scrymore.com/*` route that otherwise answers for
+every proxied hostname in the zone. Full table and wiring rules:
+`scry-management/ENDPOINTS.md`.
 
 Pushes to these branches deploy after checks pass; Markdown and `docs/**` changes
 alone do not trigger push CI. Use the workflow's `environment` choice for a manual
@@ -184,14 +192,16 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
 
 - Add staging `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, and `FIREBASE_PROJECT_ID`
   for `scry-dev-dashboard-stage`.
-- Set `SCRY_SEARCH_API_URL` to the scry-nextjs stable stage alias and
-  `SCRY_SEARCH_API_KEY` to its stage-only API key. Store that key on Vercel as a
+- Set `SCRY_SEARCH_API_URL` to `https://search-stage.scrymore.com` (production uses
+  `https://search.scrymore.com`) and `SCRY_SEARCH_API_KEY` to its stage-only API key. Store that key on Vercel as a
   plain encrypted Preview variable, not a sensitive one: sensitive values cannot
   be read back, and the promotion smoke check (`scry-management/smoke-search.py`)
   pulls it with `vercel env pull`.
 - Set `SCRY_SEARCH_API_BYPASS_TOKEN` to the scry-nextjs project's Protection Bypass
-  for Automation token. The stage alias is behind Vercel Deployment Protection and
-  answers a bare worker request with a login page; the worker sends the token as
+  for Automation token. The stage search host is behind Vercel Deployment Protection
+  and answers a bare worker request with a login page (its custom domain does not
+  change that: a branch-assigned domain serves a preview deployment, and per-domain
+  exceptions need a paid plan); the worker sends the token as
   `x-vercel-protection-bypass` only when this secret exists. Production has no such
   secret and sends no header.
 - Set `SCRY_CALLER_ASSERTION_SECRET` to the same value as the scry-nextjs Preview
