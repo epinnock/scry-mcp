@@ -20,6 +20,7 @@
       "preview_id": "458bc39341e74f3baa8913257b54e356"
     }
   ],
+  "analytics_engine_datasets": [{ "binding": "MCP_USAGE", "dataset": "scry_mcp_usage" }],
   "durable_objects": {
     "bindings": [
       {
@@ -46,6 +47,7 @@
           "preview_id": "8fd3a345500f415a82a5da47b4ae79f1"
         }
       ],
+      "analytics_engine_datasets": [{ "binding": "MCP_USAGE", "dataset": "scry_mcp_usage_staging" }],
       "durable_objects": {
         "bindings": [
           {
