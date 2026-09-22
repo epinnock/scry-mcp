@@ -1,5 +1,6 @@
 {
   "name": "scry-mcp",
+  "license": "MIT",
   "scripts": {
     "build:widgets": "rm -rf web/dist/widgets && INPUT=web/widgets/search-results-widget.html vite build --config vite.config.ts && INPUT=web/widgets/screenshot-widget.html vite build --config vite.config.ts && INPUT=web/widgets/generated-image-widget.html vite build --config vite.config.ts",
     "dev": "npm run build:widgets && wrangler dev",
