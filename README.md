@@ -38,6 +38,24 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `whoami` | Returns the authenticated user's info |
 
+## Usage analytics
+
+Each tool handler invocation records one Workers Analytics Engine data point for
+use by the dashboard's staff-only KPI page. The only recorded values are the tool
+name (`blob1`), environment (`blob2`), and Firebase uid (`blob3` and `index1`), plus
+`double1 = 1` for counting. Missing environment/uid values become `unknown` and
+`anonymous`. No query text, prompts, image data, tokens, or other tool data is sent
+to Analytics Engine. Internal diagnostic logs do not add usage points. Missing or
+failing analytics bindings never affect tool responses.
+
+The `MCP_USAGE` binding writes to `scry_mcp_usage` in production and
+`scry_mcp_usage_staging` in staging. Query production with the Analytics Engine SQL
+API (substitute the staging dataset name for staging):
+
+```sql
+SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() - INTERVAL '30' DAY GROUP BY tool
+```
+
 ## Project Structure
 
 ```

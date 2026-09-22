@@ -3,6 +3,7 @@ declare namespace Cloudflare {
     OAUTH_KV: KVNamespace;
     OAUTH_PROVIDER: OAuthProvider;
     MCP_OBJECT: DurableObjectNamespace;
+    MCP_USAGE?: AnalyticsEngineDataset;
     FIREBASE_API_KEY: string;
     FIREBASE_AUTH_DOMAIN: string;
     FIREBASE_PROJECT_ID: string;

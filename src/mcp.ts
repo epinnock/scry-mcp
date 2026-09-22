@@ -108,13 +108,28 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   // --- Structured logging ---
-  private log(tool: string, data: Record<string, unknown>) {
+  private logDiagnostic(tool: string, data: Record<string, unknown>) {
     console.log(JSON.stringify({
       tool,
       userId: this.props?.firebaseUid,
       timestamp: new Date().toISOString(),
       ...data,
     }));
+  }
+
+  /** Record usage once at tool entry; internal diagnostics must not inflate counts. */
+  private log(tool: string, data: Record<string, unknown>) {
+    this.logDiagnostic(tool, data);
+    try {
+      const uid = this.props?.firebaseUid ?? "anonymous";
+      this.env.MCP_USAGE?.writeDataPoint({
+        blobs: [tool, this.env.SCRY_ENV ?? "unknown", uid],
+        doubles: [1],
+        indexes: [uid],
+      });
+    } catch {
+      // Analytics is best-effort and must never affect the tool response.
+    }
   }
 
   // --- Structured error responses ---
@@ -178,7 +193,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       );
 
       if (!response.ok) {
-        this.log("getPresignedUrl", { status: response.status, success: false });
+        this.logDiagnostic("getPresignedUrl", { status: response.status, success: false });
         return null;
       }
 
@@ -187,7 +202,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     } catch (err) {
       // Includes a missing SCRY_CALLER_ASSERTION_SECRET: presigning is
       // best-effort for thumbnails, but the cause must reach the logs.
-      this.log("getPresignedUrl", { error: String(err), success: false });
+      this.logDiagnostic("getPresignedUrl", { error: String(err), success: false });
       return null;
     }
   }
@@ -249,7 +264,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     if (!response.ok) {
       const errorText = await response.text();
       // Log full error server-side but do NOT expose to client (may contain API key or sensitive details)
-      this.log("generateImageViaGemini", { status: response.status, error: errorText });
+      this.logDiagnostic("generateImageViaGemini", { status: response.status, error: errorText });
       throw Object.assign(
         new Error(`Gemini API error (HTTP ${response.status}). Check server logs for details.`),
         { code: "GEMINI_API_ERROR", statusCode: response.status },
@@ -310,14 +325,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       );
 
       if (!response.ok) {
-        this.log("uploadToR2", { status: response.status, key, success: false });
+        this.logDiagnostic("uploadToR2", { status: response.status, key, success: false });
         return null;
       }
 
-      this.log("uploadToR2", { key, success: true });
+      this.logDiagnostic("uploadToR2", { key, success: true });
       return key;
     } catch (err) {
-      this.log("uploadToR2", { error: String(err), key, success: false });
+      this.logDiagnostic("uploadToR2", { error: String(err), key, success: false });
       return null;
     }
   }
@@ -333,7 +348,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // Fail closed and say why. Searching without an identity would return
       // public projects only, which looks like "no results" to the agent and
       // hides a missing secret indefinitely.
-      this.log("callSearchAPI", { error: String(err), success: false });
+      this.logDiagnostic("callSearchAPI", { error: String(err), success: false });
       return this.toolError(
         "SERVER_MISCONFIGURED",
         "The Scry MCP server cannot sign its caller assertion (SCRY_CALLER_ASSERTION_SECRET is not set). Ask the operator to configure it.",
@@ -355,7 +370,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     if (!response.ok) {
       const errorText = await response.text();
-      this.log("callSearchAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
+      this.logDiagnostic("callSearchAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
 
       const { code: statusCode, retryable } = classifySearchApiError(response.status);
       // Prefer the API's own code (INVALID_SCOPE, PROJECT_HAS_NO_ORG,
@@ -402,7 +417,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       excluded?: { not_discoverable?: number; unauthorised?: number };
     };
 
-    this.log("callSearchAPI", {
+    this.logDiagnostic("callSearchAPI", {
       resultCount: data.results.length,
       total: data.pagination.total,
       latencyMs: Date.now() - start,
@@ -638,12 +653,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         },
       },
       async ({ query, limit, page, project_id, scope }) => {
+        this.log("search_components", {});
         if (!this.checkRateLimit()) {
-          this.log("search_components", { rateLimited: true });
+          this.logDiagnostic("search_components", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
-        this.log("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope });
+        this.logDiagnostic("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope });
 
         return this.callSearchAPI({
           text: query,
@@ -696,8 +712,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         },
       },
       async ({ image, query, limit, page, project_id, scope }) => {
+        this.log("search_by_image", {});
         if (!this.checkRateLimit()) {
-          this.log("search_by_image", { rateLimited: true });
+          this.logDiagnostic("search_by_image", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
@@ -706,7 +723,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           return this.toolError("VALIDATION_ERROR", `Image too large (${(image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`, false);
         }
 
-        this.log("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope });
+        this.logDiagnostic("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope });
 
         return this.callSearchAPI({
           image,
@@ -749,8 +766,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         },
       },
       async ({ screenshot_url, component_name }) => {
+        this.log("get_component_screenshot", {});
         if (!this.checkRateLimit()) {
-          this.log("get_component_screenshot", { rateLimited: true });
+          this.logDiagnostic("get_component_screenshot", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
@@ -760,7 +778,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         const presignResult = await this.getPresignedUrl(screenshot_url);
 
         if (!presignResult) {
-          this.log("get_component_screenshot", { hasImage: false, hasPresignedUrl: false, latencyMs: Date.now() - start });
+          this.logDiagnostic("get_component_screenshot", { hasImage: false, hasPresignedUrl: false, latencyMs: Date.now() - start });
           return this.toolError(
             "SCREENSHOT_FETCH_FAILED",
             `Could not generate presigned URL for: ${screenshot_url}`,
@@ -779,11 +797,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             imageResult = { base64, mimeType };
           }
         } catch (err) {
-          this.log("get_component_screenshot", { imageError: String(err) });
+          this.logDiagnostic("get_component_screenshot", { imageError: String(err) });
           // Image fetch failed — still return the presigned URL
         }
 
-        this.log("get_component_screenshot", {
+        this.logDiagnostic("get_component_screenshot", {
           hasImage: !!imageResult,
           hasPresignedUrl: true,
           latencyMs: Date.now() - start,
@@ -860,8 +878,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         },
       },
       async ({ prompt, aspect_ratio, quality, reference_image, reference_images }) => {
+        this.log("generate_image", {});
         if (!this.checkRateLimit()) {
-          this.log("generate_image", { rateLimited: true });
+          this.logDiagnostic("generate_image", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
@@ -887,7 +906,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         const start = Date.now();
-        this.log("generate_image", {
+        this.logDiagnostic("generate_image", {
           promptLength: prompt.length,
           aspectRatio: aspect_ratio,
           quality: quality || "fast",
@@ -904,7 +923,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           });
         } catch (err) {
           const error = err as Error & { code?: string; statusCode?: number };
-          this.log("generate_image", { error: error.message, latencyMs: Date.now() - start });
+          this.logDiagnostic("generate_image", { error: error.message, latencyMs: Date.now() - start });
 
           if (error.code === "SAFETY_FILTERED") {
             return this.toolError("SAFETY_FILTERED", error.message, false);
@@ -928,7 +947,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           presignResult = await this.getPresignedUrl(uploadedKey);
         }
 
-        this.log("generate_image", {
+        this.logDiagnostic("generate_image", {
           model: genResult.model,
           uploaded: !!uploadedKey,
           hasPresignedUrl: !!presignResult,
