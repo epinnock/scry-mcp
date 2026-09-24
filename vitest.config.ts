@@ -16,6 +16,9 @@ export default defineWorkersConfig({
           compatibilityDate: "2025-03-10",
           compatibilityFlags: ["nodejs_compat"],
           kvNamespaces: ["OAUTH_KV"],
+          // The top-level (production) vars turn the gateway and Langfuse on; tests start
+          // from "off" and opt in per test, as they did before production enabled them.
+          bindings: { LLM_GATEWAY_URL: "", LANGFUSE_ENABLED: "0", LANGFUSE_SAMPLE_RATE: "1" },
         },
       },
     },
