@@ -458,7 +458,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async callerWallet(): Promise<ResolvedWallet> {
     if (this.walletCache && Date.now() < this.walletCache.exp) return this.walletCache.wallet;
     this.firestore ??= new FirestoreReader(this.env);
-    const wallet = await resolveCallerWallet(this.firestore, this.props.firebaseUid, this.props.displayName);
+    const wallet = await resolveCallerWallet(this.firestore, this.props.firebaseUid);
     this.walletCache = { wallet, exp: Date.now() + 60_000 };
     return wallet;
   }
