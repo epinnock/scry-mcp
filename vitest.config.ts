@@ -20,7 +20,8 @@ export default defineWorkersConfig({
           // from "off" and opt in per test, as they did before production enabled them.
           // Dynamic sampling is off by default too, so a test that turns Langfuse on never
           // fetches the diff-service sampling endpoint unless it opts in (with a stubbed fetch).
-          bindings: { LLM_GATEWAY_URL: "", LANGFUSE_ENABLED: "0", LANGFUSE_SAMPLE_RATE: "1", LANGFUSE_DYNAMIC_SAMPLING: "0" },
+          // Credits likewise start "off" (production enforces, which fails closed without a ledger).
+          bindings: { CREDITS_MODE: "off", LLM_GATEWAY_URL: "", LANGFUSE_ENABLED: "0", LANGFUSE_SAMPLE_RATE: "1", LANGFUSE_DYNAMIC_SAMPLING: "0" },
         },
       },
     },

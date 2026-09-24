@@ -242,7 +242,7 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   `enforce`: shadow writes the ledger but never refuses; enforce returns
   `INSUFFICIENT_CREDITS` (no Gemini call) and fails closed with
   `CREDITS_UNAVAILABLE` when the ledger cannot be reached. Staging is `enforce`,
-  production `shadow` (Gate B 2026-09-24; enforce after one week).
+  production `enforce` since 2026-09-24 (the shadow week was skipped).
   `CREDITS_API_URL` (the diff-service ledger) and `CREDITS_PAGE_URL` (dashboard
   `/credits`, linked from the refusal message) are vars in `wrangler.jsonc`. The wallet is the caller's org (`org:<users/{uid}.activeOrgId>`
   if they are in its `memberIds`, else `org:personal_<uid>`), read from Firestore
