@@ -15,6 +15,22 @@ import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
 import { enqueueSpans, envName, shouldTrace, utcDay } from "./telemetry/producer";
+import {
+  CreditsClient,
+  CreditsUnavailableError,
+  IMAGE_CREDIT_PRICE,
+  IMAGE_CREDIT_TASK,
+  IMAGE_LABEL,
+  creditsMode,
+  creditsPageUrl,
+  creditsUsedLine,
+  insufficientCreditsMessage,
+  parseGeminiUsage,
+  usageReason,
+  type CreditBalance,
+  type ImageQuality,
+  type ImageTokenUsage,
+} from "./credits";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -59,6 +75,17 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+/** The ledger fields of a search API 402 insufficient_credits body, or null. */
+function insufficientCreditsDetail(bodyText: string): { needed: number; available: number; resetsAt: string } | null {
+  try {
+    const b = JSON.parse(bodyText) as Record<string, unknown>;
+    if (b?.error !== "insufficient_credits" && b?.code !== "insufficient_credits") return null;
+    return { needed: Number(b.needed ?? 1), available: Number(b.available ?? 0), resetsAt: String(b.resets_at ?? "") };
+  } catch {
+    return null;
+  }
 }
 
 /** Fetch compiled widget HTML from the ASSETS binding */
@@ -238,7 +265,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     prompt: string,
     options: { aspectRatio?: string; quality?: string; referenceImages?: string[] } = {},
     trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: crypto.randomUUID() },
-  ): Promise<{ base64: string; mimeType: string; model: string }> {
+  ): Promise<{ base64: string; mimeType: string; model: string; usage: ImageTokenUsage | null }> {
     const quality = options.quality || "fast";
     const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
     // Throws LlmGatewayConfigError (before any request) when the gateway is on
@@ -340,7 +367,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
         finishReason?: string;
       }>;
-      usageMetadata?: GeminiUsage;
+      usageMetadata?: GeminiUsage & Parameters<typeof parseGeminiUsage>[0];
     };
     call.endMs = Date.now();
     call.usage = data.usageMetadata ?? null;
@@ -374,6 +401,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       base64: imagePart.inlineData.data,
       mimeType: imagePart.inlineData.mimeType || "image/png",
       model,
+      usage: parseGeminiUsage(data.usageMetadata),
     };
   }
 
@@ -406,6 +434,98 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     } catch (err) {
       this.logDiagnostic("uploadToR2", { error: String(err), key, success: false });
       return null;
+    }
+  }
+
+  // --- AI credits (feature ai-credits): generate_image is paid by the caller ---
+
+  /**
+   * Hold the image's price on the caller's wallet before Gemini is called.
+   * Returns the hold (refId null when nothing was held) or, in enforce mode,
+   * the tool error to return instead of generating. See src/credits.ts for the
+   * off / shadow / enforce semantics.
+   */
+  private async reserveImageCredits(
+    quality: ImageQuality,
+    requestId: string,
+  ): Promise<
+    | { ok: true; refId: string | null; amount: number; wouldBlock: boolean; balance: CreditBalance | null }
+    | { ok: false; code: string; result: ReturnType<ScryMCP["toolError"]> }
+  > {
+    const mode = creditsMode(this.env);
+    const none = { ok: true as const, refId: null, amount: 0, wouldBlock: false, balance: null };
+    if (mode === "off") return none;
+    const refId = `mcp-image:${requestId}`;
+    try {
+      const r = await new CreditsClient(this.env).reserve({
+        walletId: `user:${this.props.firebaseUid}`,
+        task: IMAGE_CREDIT_TASK[quality],
+        refId,
+        actorUid: this.props.firebaseUid,
+      });
+      if (r.kind === "skipped") return none;
+      if (r.kind === "held") {
+        if (r.wouldBlock) this.logDiagnostic("credits", { requestId, op: "reserve", wouldBlock: true, available: r.balance?.available });
+        return { ok: true, refId, amount: r.amount, wouldBlock: r.wouldBlock, balance: r.balance };
+      }
+      // 402 from the ledger (its own mode is enforce).
+      this.logDiagnostic("credits", { requestId, op: "reserve", insufficient: true, needed: r.needed, available: r.available, mode });
+      if (mode === "shadow") return none;
+      const message = insufficientCreditsMessage(r, IMAGE_LABEL[quality], creditsPageUrl(this.env));
+      return {
+        ok: false,
+        code: "INSUFFICIENT_CREDITS",
+        result: {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              error: "INSUFFICIENT_CREDITS",
+              message,
+              retryable: false,
+              needed: r.needed,
+              available: r.available,
+              resets_at: r.resetsAt,
+              credits_url: creditsPageUrl(this.env),
+            }),
+          }],
+          isError: true,
+        },
+      };
+    } catch (err) {
+      if (!(err instanceof CreditsUnavailableError)) throw err;
+      this.logDiagnostic("credits", { requestId, op: "reserve", unavailable: true, error: err.message, mode });
+      if (mode === "shadow") return none;
+      return {
+        ok: false,
+        code: "CREDITS_UNAVAILABLE",
+        result: this.toolError(
+          "CREDITS_UNAVAILABLE",
+          "Scry could not check your AI credits, so no image was generated and nothing was charged. Try again shortly.",
+          true,
+        ),
+      };
+    }
+  }
+
+  /** Charge a held image (success). Never throws; one retry, then the hold's 60-min expiry releases it. */
+  private async settleImageCredits(refId: string, reason: string, requestId: string): Promise<CreditBalance | null> {
+    const client = new CreditsClient(this.env);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        return await client.settle(refId, reason);
+      } catch (err) {
+        this.logDiagnostic("credits", { requestId, op: "settle", attempt, error: String(err) });
+      }
+    }
+    return null;
+  }
+
+  /** Give a hold back in full (the image failed). Never throws; the 60-min expiry is the backstop. */
+  private async releaseImageCredits(refId: string, requestId: string): Promise<void> {
+    try {
+      await new CreditsClient(this.env).release(refId, "failed, refunded");
+    } catch (err) {
+      this.logDiagnostic("credits", { requestId, op: "release", error: String(err) });
     }
   }
 
@@ -449,6 +569,19 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // PROJECT_REQUIRED, INVALID_CALLER_ASSERTION, ...) so the agent can
       // branch on the cause rather than on a bare status.
       const errorCode = upstreamErrorCode(errorText) ?? statusCode;
+
+      // Image search is paid (1 credit) by the caller; the search API answers
+      // 402 insufficient_credits at zero. Same copy as generate_image.
+      if (response.status === 402) {
+        const detail = insufficientCreditsDetail(errorText);
+        if (detail) {
+          return this.toolError(
+            "INSUFFICIENT_CREDITS",
+            insufficientCreditsMessage(detail, "Image search", creditsPageUrl(this.env)),
+            false,
+          );
+        }
+      }
 
       return this.toolError(
         errorCode,
@@ -931,12 +1064,19 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "- Prompt must be 1–4000 characters",
           "- Reference image(s) must each be under 10MB base64",
           "- Generation takes 10–30 seconds",
+          ...(creditsMode(this.env) === "off" ? [] : [
+            `- Uses the caller's Scry AI credits: ${IMAGE_CREDIT_PRICE.fast} (fast) or ${IMAGE_CREDIT_PRICE.quality} (quality) per image; failed images are refunded`,
+          ]),
           "",
           "Failure modes:",
           "- RATE_LIMITED: Too many requests. Wait and retry.",
           "- SAFETY_FILTERED: Prompt was blocked by safety filters. Rephrase and retry.",
           "- GEMINI_API_ERROR: Upstream error. Retry once for 5xx errors.",
           "- VALIDATION_ERROR: Bad input. Fix parameters and retry.",
+          ...(creditsMode(this.env) === "off" ? [] : [
+            "- INSUFFICIENT_CREDITS: Not enough AI credits. Do not retry; tell the user (the message has the credits link). A 'fast' image costs less than 'quality'.",
+            "- CREDITS_UNAVAILABLE: Credits could not be checked; nothing was charged. Retry once.",
+          ]),
         ].join("\n"),
         inputSchema: {
           prompt: z.string().min(1).max(MAX_PROMPT_LENGTH).describe("Description of the image to generate (e.g. 'A blue primary button with rounded corners')"),
@@ -995,8 +1135,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           referenceImageCount: mergedImages.length,
         });
 
+        // Step 0: hold the price on the caller's wallet (no Gemini call when refused).
+        const creditQuality: ImageQuality = quality === "quality" ? "quality" : "fast";
+        const credits = await this.reserveImageCredits(creditQuality, requestId);
+        if (!credits.ok) {
+          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: undefined, outputRef: null, presigned: false, outcome: credits.code });
+          return credits.result;
+        }
+
         // Step 1: Generate image via Gemini
-        let genResult: { base64: string; mimeType: string; model: string };
+        let genResult: { base64: string; mimeType: string; model: string; usage: ImageTokenUsage | null };
         try {
           genResult = await this.generateImageViaGemini(prompt, {
             aspectRatio: aspect_ratio,
@@ -1019,8 +1167,20 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             const retryable = error.statusCode !== undefined && error.statusCode >= 500;
             result = this.toolError(code, error.message, retryable);
           }
+          if (credits.refId) await this.releaseImageCredits(credits.refId, requestId);
           await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: trace.call, outputRef: null, presigned: false, outcome: code });
           return result;
+        }
+
+        // Step 1b: the image exists, so the hold is charged (a storage failure
+        // below still returns the image inline). The debit's reason carries the
+        // Gemini token counts, so each image's usage is on its ledger row.
+        let creditBalance: CreditBalance | null = credits.balance;
+        let settled = false;
+        if (credits.refId) {
+          const after = await this.settleImageCredits(credits.refId, usageReason(genResult.model, genResult.usage), requestId);
+          settled = after !== null;
+          if (after) creditBalance = after;
         }
 
         // Step 2: Upload to R2 (non-fatal)
@@ -1041,6 +1201,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         this.logDiagnostic("generate_image", {
           requestId,
           model: genResult.model,
+          usage: genResult.usage,
+          creditsHeld: credits.amount,
+          creditsSettled: settled,
           uploaded: !!uploadedKey,
           hasPresignedUrl: !!presignResult,
           latencyMs: Date.now() - start,
@@ -1081,6 +1244,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           });
         }
 
+        // Credits line: what this image cost and what is left.
+        if (credits.refId && creditBalance) {
+          content.push({ type: "text", text: creditsUsedLine(credits.amount, creditBalance.available, creditBalance.resets_at) });
+        }
+
         const generatedAt = new Date().toISOString();
         const structuredImage: Record<string, unknown> = {
           prompt,
@@ -1097,11 +1265,18 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           structuredImage.base64 = genResult.base64;
         }
 
+        const structuredContent: Record<string, unknown> = { generatedImage: structuredImage };
+        if (credits.refId) {
+          structuredContent.credits_used = credits.amount;
+          if (creditBalance) {
+            structuredContent.credits_left = creditBalance.available;
+            structuredContent.credits_resets_at = creditBalance.resets_at;
+          }
+        }
+
         return {
           content,
-          structuredContent: {
-            generatedImage: structuredImage,
-          },
+          structuredContent,
         };
       }
     );

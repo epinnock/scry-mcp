@@ -232,6 +232,14 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
 - Add a staging `COOKIE_ENCRYPTION_KEY`, `GEMINI_API_KEY` for image generation,
   and optionally `SENTRY_DSN` for error reporting. In Phase 2, use
   `wrangler secret put <NAME> --env staging`; production secrets remain top-level.
+- AI credits (`generate_image` holds 40 fast / 150 quality credits on the caller's
+  wallet in the scry-diff-service ledger): set `CREDITS_API_TOKEN` to that
+  environment's diff-service `SERVICE_AUTH_TOKEN` (`wrangler secret put
+  CREDITS_API_TOKEN --env staging`). `CREDITS_MODE` (vars) is `off` | `shadow` |
+  `enforce`: shadow writes the ledger but never refuses; enforce returns
+  `INSUFFICIENT_CREDITS` (no Gemini call) and fails closed with
+  `CREDITS_UNAVAILABLE` when the ledger cannot be reached. Staging is `shadow`,
+  production `off`.
 - In the staging Firebase console, authorize
   `scry-mcp-staging.epinnock.workers.dev` and enable the intended sign-in providers
   (Google and email/password alongside GitHub).
