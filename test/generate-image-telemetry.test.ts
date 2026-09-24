@@ -210,3 +210,25 @@ describe("generate_image traces", () => {
     err.mockRestore();
   });
 });
+
+describe("generate_image request body", () => {
+  it("sends aspect_ratio as generationConfig.imageConfig.aspectRatio (not generationConfig.aspect_ratio)", async () => {
+    const calls = mockUpstreams();
+    await withClient({ LLM_GATEWAY_URL: undefined }, async (client) => {
+      const result = await client.callTool({ name: "generate_image", arguments: { prompt: "banner", aspect_ratio: "16:9" } });
+      expect(result.isError).not.toBe(true);
+      expect((result.structuredContent as { generatedImage: { aspectRatio: string } }).generatedImage.aspectRatio).toBe("16:9");
+    });
+    const body = JSON.parse(calls[0].body);
+    expect(body.generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: "16:9" } });
+    expect(body.generationConfig).not.toHaveProperty("aspect_ratio");
+  });
+
+  it("omits imageConfig when no aspect_ratio is given (Gemini default)", async () => {
+    const calls = mockUpstreams();
+    await withClient({ LLM_GATEWAY_URL: undefined }, async (client) => {
+      expect((await client.callTool({ name: "generate_image", arguments: { prompt: "banner" } })).isError).not.toBe(true);
+    });
+    expect(JSON.parse(calls[0].body).generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
+  });
+});

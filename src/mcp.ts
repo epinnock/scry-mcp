@@ -271,9 +271,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       responseModalities: ["TEXT", "IMAGE"],
     };
 
-    // Gemini uses snake_case for aspect_ratio in generation_config
+    // The aspect ratio lives in generationConfig.imageConfig.aspectRatio. A
+    // top-level generationConfig.aspect_ratio is not a Gemini field: the API
+    // either rejects the request (400) or ignores it and returns 1:1.
     if (options.aspectRatio) {
-      generationConfig.aspect_ratio = options.aspectRatio;
+      generationConfig.imageConfig = { aspectRatio: options.aspectRatio };
     }
 
     const requestBody: Record<string, unknown> = {

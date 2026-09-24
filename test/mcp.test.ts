@@ -155,10 +155,7 @@ describe("MCP Tools", () => {
       // Assert structuredContent.generatedImage has base64 (not url)
     it.todo("returns base64 inline when R2 upload fails (graceful degradation)");
 
-          // Mock Gemini API → 200
-      // Call generate_image with { prompt: "banner", aspect_ratio: "16:9" }
-      // Assert Gemini request body includes generationConfig.aspectRatio: "16:9"
-    it.todo("passes aspect_ratio to Gemini API generation config");
+    // aspect_ratio → generationConfig.imageConfig.aspectRatio: covered in generate-image-telemetry.test.ts.
 
           // Mock Gemini API → 200
       // Call generate_image with { prompt: "make it blue", reference_image: "iVBOR..." }
