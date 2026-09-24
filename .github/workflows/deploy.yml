@@ -3,10 +3,13 @@ name: Deploy Scry MCP
 # PRs validate only. Pushes to stage/main deploy staging/production.
 
 on:
+  # ready_for_review: drafts skip CI, so a PR gets its first run when marked ready.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
       - stage
+    paths-ignore: ['**/*.md', 'docs/**']
   push:
     branches:
       - main
@@ -23,14 +26,17 @@ on:
           - staging
           - production
 
+# PR runs collapse to the newest push. Pushes to stage/main queue per branch and
+# are never cancelled: a deploy must not stop halfway.
 concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     name: Tests
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -64,7 +70,7 @@ jobs:
         run: npm test
 
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}
     name: Deploy
     needs: test
     environment:
