@@ -12,6 +12,9 @@ import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-assertion.js";
 import { searchApiHeaders } from "./search-api-headers";
+import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
+import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
+import { enqueueSpans, envName, shouldTrace, utcDay } from "./telemetry/producer";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -117,6 +120,26 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }));
   }
 
+  /**
+   * Enqueue the spans of one generate_image call for Langfuse (store-and-forward
+   * via the diff-service telemetry queue). Sampled; never throws, never blocks
+   * the tool result on anything slower than a queue send.
+   */
+  private async traceImageCall(t: Omit<ImageCallTrace, "userId" | "envName" | "commit">): Promise<void> {
+    try {
+      if (!shouldTrace(this.env, t.runId)) return;
+      const spans = buildImageSpans({
+        ...t,
+        userId: this.props?.firebaseUid ?? null,
+        envName: envName(this.env),
+        commit: this.env.SCRY_COMMIT ?? null,
+      });
+      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans });
+    } catch (err) {
+      this.logDiagnostic("traceImageCall", { requestId: t.runId, error: String(err) });
+    }
+  }
+
   /** Record usage once at tool entry; internal diagnostics must not inflate counts. */
   private log(tool: string, data: Record<string, unknown>) {
     this.logDiagnostic(tool, data);
@@ -214,9 +237,18 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async generateImageViaGemini(
     prompt: string,
     options: { aspectRatio?: string; quality?: string; referenceImages?: string[] } = {},
+    trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: crypto.randomUUID() },
   ): Promise<{ base64: string; mimeType: string; model: string }> {
     const quality = options.quality || "fast";
     const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
+    // Throws LlmGatewayConfigError (before any request) when the gateway is on
+    // without its token; the handler reports that as SERVER_MISCONFIGURED.
+    const route = llmRoute(this.env, "google-ai-studio", {
+      svc: "mcp",
+      feat: "generate_image",
+      user: this.props?.firebaseUid ?? null,
+      run: trace.runId,
+    });
 
     // Build content parts — reference images first, then text prompt
     const parts: Array<Record<string, unknown>> = [];
@@ -249,22 +281,47 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       generationConfig,
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.env.GEMINI_API_KEY}`;
+    // The key goes in x-goog-api-key, never the URL query: a URL can land in
+    // gateway and proxy log rows, a header is not logged.
+    const url = `${route.baseUrl}/v1beta/models/${model}:generateContent`;
 
-    const response = await this.fetchWithTimeout(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
-      IMAGE_GENERATION_TIMEOUT_MS,
-    );
+    const call: NonNullable<ImageCallTrace["call"]> = {
+      startMs: Date.now(),
+      endMs: Date.now(),
+      model,
+      viaGateway: route.viaGateway,
+      status: "error",
+    };
+    trace.call = call;
+
+    let response: Response;
+    try {
+      response = await this.fetchWithTimeout(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": this.env.GEMINI_API_KEY,
+            ...route.headers,
+          },
+          body: JSON.stringify(requestBody),
+        },
+        IMAGE_GENERATION_TIMEOUT_MS,
+      );
+    } catch (err) {
+      call.endMs = Date.now();
+      call.error = err instanceof Error && err.name === "AbortError" ? "timeout" : String(err);
+      throw err;
+    }
+    call.httpStatus = response.status;
 
     if (!response.ok) {
       const errorText = await response.text();
-      // Log full error server-side but do NOT expose to client (may contain API key or sensitive details)
-      this.logDiagnostic("generateImageViaGemini", { status: response.status, error: errorText });
+      call.endMs = Date.now();
+      call.error = `HTTP ${response.status}`;
+      // Log full error server-side but do NOT expose to client (may contain sensitive details)
+      this.logDiagnostic("generateImageViaGemini", { status: response.status, error: errorText, requestId: trace.runId });
       throw Object.assign(
         new Error(`Gemini API error (HTTP ${response.status}). Check server logs for details.`),
         { code: "GEMINI_API_ERROR", statusCode: response.status },
@@ -281,22 +338,35 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
         finishReason?: string;
       }>;
+      usageMetadata?: GeminiUsage;
     };
+    call.endMs = Date.now();
+    call.usage = data.usageMetadata ?? null;
 
     // Check for safety blocks
     const candidate = data.candidates?.[0];
+    call.finishReason = candidate?.finishReason ?? null;
     if (!candidate || candidate.finishReason === "SAFETY") {
+      call.status = "safety";
+      call.error = "blocked by safety filters";
       throw Object.assign(
         new Error("Image generation was blocked by safety filters. Try rephrasing your prompt."),
         { code: "SAFETY_FILTERED" },
       );
     }
 
+    const text = (candidate.content?.parts ?? []).map(p => p.text).filter(Boolean).join("\n");
+    call.outputText = text || null;
+
     // Find the image part in the response
     const imagePart = candidate.content?.parts?.find(p => p.inlineData);
     if (!imagePart?.inlineData) {
+      call.status = "no_image";
+      call.error = "no image data in response";
       throw new Error("Gemini API returned no image data in response.");
     }
+    call.status = "ok";
+    call.outputMimeType = imagePart.inlineData.mimeType || "image/png";
 
     return {
       base64: imagePart.inlineData.data,
@@ -906,7 +976,17 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         const start = Date.now();
+        // One id per paid call: the gateway `run` tag, the trace id and the log correlation key.
+        const requestId = crypto.randomUUID();
+        const trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: requestId };
+        const traceBase = {
+          prompt,
+          quality: quality || "fast",
+          aspectRatio: aspect_ratio ?? null,
+          referenceImages: mergedImages,
+        };
         this.logDiagnostic("generate_image", {
+          requestId,
           promptLength: prompt.length,
           aspectRatio: aspect_ratio,
           quality: quality || "fast",
@@ -920,16 +1000,25 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             aspectRatio: aspect_ratio,
             quality,
             referenceImages: mergedImages.length > 0 ? mergedImages : undefined,
-          });
+          }, trace);
         } catch (err) {
           const error = err as Error & { code?: string; statusCode?: number };
-          this.logDiagnostic("generate_image", { error: error.message, latencyMs: Date.now() - start });
+          this.logDiagnostic("generate_image", { requestId, error: error.message, latencyMs: Date.now() - start });
 
-          if (error.code === "SAFETY_FILTERED") {
-            return this.toolError("SAFETY_FILTERED", error.message, false);
+          let code = "GEMINI_API_ERROR";
+          let result;
+          if (err instanceof LlmGatewayConfigError) {
+            code = "SERVER_MISCONFIGURED";
+            result = this.toolError(code, "The Scry MCP server's AI gateway is misconfigured. Ask the operator to check LLM_GATEWAY_URL and CF_AIG_TOKEN.", false);
+          } else if (error.code === "SAFETY_FILTERED") {
+            code = "SAFETY_FILTERED";
+            result = this.toolError(code, error.message, false);
+          } else {
+            const retryable = error.statusCode !== undefined && error.statusCode >= 500;
+            result = this.toolError(code, error.message, retryable);
           }
-          const retryable = error.statusCode !== undefined && error.statusCode >= 500;
-          return this.toolError("GEMINI_API_ERROR", error.message, retryable);
+          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: trace.call, outputRef: null, presigned: false, outcome: code });
+          return result;
         }
 
         // Step 2: Upload to R2 (non-fatal)
@@ -948,10 +1037,21 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         this.logDiagnostic("generate_image", {
+          requestId,
           model: genResult.model,
           uploaded: !!uploadedKey,
           hasPresignedUrl: !!presignResult,
           latencyMs: Date.now() - start,
+        });
+        await this.traceImageCall({
+          ...traceBase,
+          runId: requestId,
+          startMs: start,
+          endMs: Date.now(),
+          call: trace.call,
+          outputRef: r2Ref(this.env, uploadedKey),
+          presigned: !!presignResult,
+          outcome: "ok",
         });
 
         // Step 4: Build dual-format response

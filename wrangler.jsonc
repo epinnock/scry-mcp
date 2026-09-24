@@ -38,7 +38,20 @@
       "workers_dev": true,
       "routes": [],
       "vars": {
-        "SCRY_ENV": "staging"
+        "SCRY_ENV": "staging",
+        // llm-telemetry PR 7. Gemini calls go through the scry-stage AI Gateway
+        // (needs the CF_AIG_TOKEN secret). Delete this line to call Google directly.
+        "LLM_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f54b9c10de9d140756dbf449aa124f1e/scry-stage",
+        // Full traces for Langfuse, enqueued on the diff-service telemetry queue
+        // (its consumer archives to R2 and delivers). "0" stops producing spans.
+        "LANGFUSE_ENABLED": "1",
+        // Adaptive sampling knob (0..1). 100% until the unit budget says otherwise.
+        "LANGFUSE_SAMPLE_RATE": "1"
+      },
+      // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).
+      // Production has no queue binding and no gateway until Gate B.
+      "queues": {
+        "producers": [{ "binding": "TELEMETRY_QUEUE", "queue": "scry-telemetry-staging" }]
       },
       "kv_namespaces": [
         {
