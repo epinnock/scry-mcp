@@ -5,12 +5,14 @@
 //   org:<users/{uid}.activeOrgId>  when activeOrgId is set AND the caller is in
 //                                  that org's memberIds
 //   org:personal_<uid>             otherwise (the personal org; its Firestore doc
-//                                  may not exist yet, and the ledger does not need it)
+//                                  may not exist yet: the ledger does not need it,
+//                                  and it is then named "Personal workspace")
 // The caller never chooses; this server resolves it from Firestore.
 //
 // Firestore is read over REST with a service account (FIREBASE_CLIENT_EMAIL +
 // FIREBASE_PRIVATE_KEY secrets, the same pattern as scry-build-processing-service).
-// Only two documents are read per resolution: users/{uid} and orgs/{activeOrgId}.
+// At most three documents per resolution (cached 60 s): users/{uid},
+// orgs/{activeOrgId}, and orgs/personal_<uid> for its name on the fallback path.
 // A failed read throws WalletResolutionError: charging a guessed wallet (e.g. the
 // personal one when the user picked a team org) would bill the wrong account.
 
@@ -106,32 +108,33 @@ export class FirestoreReader {
 
 const str = (v: FsValue | undefined) => (typeof v?.stringValue === "string" ? v.stringValue : null);
 
+/** Name shown for a personal org whose doc does not exist yet (the dashboard creates it lazily). */
+export const PERSONAL_ORG_FALLBACK_NAME = "Personal workspace";
+
 /**
- * Rule 3 without a project. `displayName` names the personal org when its doc
- * does not exist yet ("<displayName>'s workspace", the name the dashboard gives it).
+ * Rule 3 without a project. The org's name comes from its doc; a personal org
+ * whose doc does not exist yet is "Personal workspace". Never depends on the
+ * dashboard at request time.
  */
 export async function resolveCallerWallet(
   reader: Pick<FirestoreReader, "get">,
   uid: string,
-  displayName?: string | null,
 ): Promise<ResolvedWallet> {
   if (!ID_RE.test(uid)) throw new WalletResolutionError("uid cannot form a wallet id");
-  const personal = (name: string | null): ResolvedWallet => ({
-    walletId: `org:${personalOrgId(uid)}`,
-    orgId: personalOrgId(uid),
-    orgName: name ?? (displayName ? `${displayName}'s workspace` : null),
-    personal: true,
-  });
+  const personalId = personalOrgId(uid);
+  const personal = async (doc?: Record<string, FsValue> | null): Promise<ResolvedWallet> => {
+    const d = doc === undefined ? await reader.get(`orgs/${encodeURIComponent(personalId)}`) : doc;
+    return { walletId: `org:${personalId}`, orgId: personalId, orgName: str(d?.name) ?? PERSONAL_ORG_FALLBACK_NAME, personal: true };
+  };
 
   const user = await reader.get(`users/${encodeURIComponent(uid)}`);
   const activeOrgId = str(user?.activeOrgId);
-  if (!activeOrgId || !ID_RE.test(activeOrgId)) return personal(null);
+  if (!activeOrgId || !ID_RE.test(activeOrgId)) return personal();
 
   const org = await reader.get(`orgs/${encodeURIComponent(activeOrgId)}`);
-  if (!org) return personal(null);
+  if (activeOrgId === personalId) return personal(org);
+  if (!org) return personal();
   const members = (org.memberIds?.arrayValue?.values ?? []).map((v) => v.stringValue);
-  if (!members.includes(uid)) return personal(null);
-  const name = str(org.name);
-  if (activeOrgId === personalOrgId(uid)) return personal(name);
-  return { walletId: `org:${activeOrgId}`, orgId: activeOrgId, orgName: name, personal: false };
+  if (!members.includes(uid)) return personal();
+  return { walletId: `org:${activeOrgId}`, orgId: activeOrgId, orgName: str(org.name), personal: false };
 }

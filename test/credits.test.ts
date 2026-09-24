@@ -452,17 +452,23 @@ describe("generate_image wallet resolution (D1 revised: org wallets, rule 3 with
     docs["orgs/acme"] = { name: { stringValue: "Acme" }, memberIds: { arrayValue: { values: [{ stringValue: "someone-else" }] } } };
     const r = await reserveWallet(docs);
     expect(r.wallet).toBe("org:personal_credits-test-user");
-    expect(r.structured).toMatchObject({ credits_wallet: "org:personal_credits-test-user", credits_org_name: "Credits Test's workspace" });
-    expect(r.text).toContain("Used 40 AI credits · Credits Test's workspace · 1,960 credits left (resets Oct 1).");
+    expect(r.structured).toMatchObject({ credits_wallet: "org:personal_credits-test-user", credits_org_name: "Personal workspace" });
+    expect(r.text).toContain("Used 40 AI credits · Personal workspace · 1,960 credits left (resets Oct 1).");
+    expect(r.firestore).toEqual(["users/credits-test-user", "orgs/acme", "orgs/personal_credits-test-user"]);
   });
 
-  it("falls back to the personal org when activeOrgId is unset or the user doc is missing (no org read)", async () => {
-    const r1 = await reserveWallet({ "users/credits-test-user": {} });
+  it("falls back to the personal org when activeOrgId is unset or the user doc is missing, named from its doc", async () => {
+    const r1 = await reserveWallet({
+      "users/credits-test-user": {},
+      "orgs/personal_credits-test-user": { name: { stringValue: "Credits Test's workspace" }, personal: { booleanValue: true } },
+    });
     expect(r1.wallet).toBe("org:personal_credits-test-user");
-    expect(r1.firestore).toEqual(["users/credits-test-user"]);
+    expect(r1.firestore).toEqual(["users/credits-test-user", "orgs/personal_credits-test-user"]);
+    expect(r1.structured).toMatchObject({ credits_org_name: "Credits Test's workspace" });
     vi.restoreAllMocks();
     const r2 = await reserveWallet({});
     expect(r2.wallet).toBe("org:personal_credits-test-user");
+    expect(r2.structured).toMatchObject({ credits_org_name: "Personal workspace" });
   });
 
   it("falls back to the personal org when the active org doc does not exist", async () => {
@@ -477,12 +483,13 @@ describe("generate_image wallet resolution (D1 revised: org wallets, rule 3 with
     });
     expect(r.wallet).toBe("org:personal_credits-test-user");
     expect(r.structured).toMatchObject({ credits_org_name: "My space" });
+    expect(r.firestore).toEqual(["users/credits-test-user", "orgs/personal_credits-test-user"]);
   });
 
   it("ignores an activeOrgId that cannot be a wallet id", async () => {
     const r = await reserveWallet({ "users/credits-test-user": { activeOrgId: { stringValue: "../projects/x" } } });
     expect(r.wallet).toBe("org:personal_credits-test-user");
-    expect(r.firestore).toEqual(["users/credits-test-user"]);
+    expect(r.firestore).toEqual(["users/credits-test-user", "orgs/personal_credits-test-user"]);
   });
 
   it("caches the resolution for a minute: two images, one pair of Firestore reads", async () => {
