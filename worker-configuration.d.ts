@@ -17,7 +17,19 @@ declare namespace Cloudflare {
      * fail closed with SERVER_MISCONFIGURED rather than searching anonymously.
      */
     SCRY_CALLER_ASSERTION_SECRET?: string;
-    GEMINI_API_KEY: string;        // Google Gemini API key for image generation
+    GEMINI_API_KEY: string;        // Google Gemini API key for image generation (sent as x-goog-api-key)
+    /** Cloudflare AI Gateway root (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>). Unset = direct to the provider (kill switch). */
+    LLM_GATEWAY_URL?: string;
+    /** AI Gateway Run token for the authenticated gateway (secret). Required when LLM_GATEWAY_URL is set. */
+    CF_AIG_TOKEN?: string;
+    /** "1" = enqueue full traces for Langfuse on TELEMETRY_QUEUE. */
+    LANGFUSE_ENABLED?: string;
+    /** 0..1 share of calls traced (default 1). Adaptive sampling steps it down. */
+    LANGFUSE_SAMPLE_RATE?: string;
+    /** Producer for the diff-service telemetry queue (scry-telemetry-<env>). */
+    TELEMETRY_QUEUE?: Queue<import("./src/telemetry/producer").SpansMessage>;
+    /** R2 bucket the search API stores generated images in (for scry-r2:// refs). Defaults by SCRY_ENV. */
+    SCREENSHOT_BUCKET_NAME?: string;
     COOKIE_ENCRYPTION_KEY: string;
     DEV_BYPASS_AUTH?: string;
     SCRY_ENV?: "staging" | "production" | "dev";
