@@ -31,6 +31,7 @@ import {
   type ImageQuality,
   type ImageTokenUsage,
 } from "./credits";
+import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 // --- Constants ---
@@ -445,20 +446,38 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
    * the tool error to return instead of generating. See src/credits.ts for the
    * off / shadow / enforce semantics.
    */
+  // One per Durable Object (= per user): caches the service-account token.
+  private firestore: FirestoreReader | null = null;
+  private walletCache: { wallet: ResolvedWallet; exp: number } | null = null;
+
+  /**
+   * The wallet this caller's personal actions are paid from (D1 revised: org
+   * wallets, rule 3 without a project). Cached for 60 s so a burst of images
+   * reads Firestore once; a changed active org applies within a minute.
+   */
+  private async callerWallet(): Promise<ResolvedWallet> {
+    if (this.walletCache && Date.now() < this.walletCache.exp) return this.walletCache.wallet;
+    this.firestore ??= new FirestoreReader(this.env);
+    const wallet = await resolveCallerWallet(this.firestore, this.props.firebaseUid, this.props.displayName);
+    this.walletCache = { wallet, exp: Date.now() + 60_000 };
+    return wallet;
+  }
+
   private async reserveImageCredits(
     quality: ImageQuality,
     requestId: string,
   ): Promise<
-    | { ok: true; refId: string | null; amount: number; wouldBlock: boolean; balance: CreditBalance | null }
+    | { ok: true; refId: string | null; amount: number; wouldBlock: boolean; balance: CreditBalance | null; wallet: ResolvedWallet | null }
     | { ok: false; code: string; result: ReturnType<ScryMCP["toolError"]> }
   > {
     const mode = creditsMode(this.env);
-    const none = { ok: true as const, refId: null, amount: 0, wouldBlock: false, balance: null };
+    const none = { ok: true as const, refId: null, amount: 0, wouldBlock: false, balance: null, wallet: null };
     if (mode === "off") return none;
     const refId = `mcp-image:${requestId}`;
     try {
+      const wallet = await this.callerWallet();
       const r = await new CreditsClient(this.env).reserve({
-        walletId: `user:${this.props.firebaseUid}`,
+        walletId: wallet.walletId,
         task: IMAGE_CREDIT_TASK[quality],
         refId,
         actorUid: this.props.firebaseUid,
@@ -466,12 +485,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       if (r.kind === "skipped") return none;
       if (r.kind === "held") {
         if (r.wouldBlock) this.logDiagnostic("credits", { requestId, op: "reserve", wouldBlock: true, available: r.balance?.available });
-        return { ok: true, refId, amount: r.amount, wouldBlock: r.wouldBlock, balance: r.balance };
+        return { ok: true, refId, amount: r.amount, wouldBlock: r.wouldBlock, balance: r.balance, wallet };
       }
       // 402 from the ledger (its own mode is enforce).
       this.logDiagnostic("credits", { requestId, op: "reserve", insufficient: true, needed: r.needed, available: r.available, mode });
       if (mode === "shadow") return none;
-      const message = insufficientCreditsMessage(r, IMAGE_LABEL[quality], creditsPageUrl(this.env));
+      const message = insufficientCreditsMessage(r, IMAGE_LABEL[quality], creditsPageUrl(this.env), wallet.orgName);
       return {
         ok: false,
         code: "INSUFFICIENT_CREDITS",
@@ -486,13 +505,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
               available: r.available,
               resets_at: r.resetsAt,
               credits_url: creditsPageUrl(this.env),
+              credits_wallet: wallet.walletId,
+              ...(wallet.orgName ? { credits_org_name: wallet.orgName } : {}),
             }),
           }],
           isError: true,
         },
       };
     } catch (err) {
-      if (!(err instanceof CreditsUnavailableError)) throw err;
+      if (!(err instanceof CreditsUnavailableError) && !(err instanceof WalletResolutionError)) throw err;
       this.logDiagnostic("credits", { requestId, op: "reserve", unavailable: true, error: err.message, mode });
       if (mode === "shadow") return none;
       return {
@@ -1246,7 +1267,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
         // Credits line: what this image cost and what is left.
         if (credits.refId && creditBalance) {
-          content.push({ type: "text", text: creditsUsedLine(credits.amount, creditBalance.available, creditBalance.resets_at) });
+          content.push({ type: "text", text: creditsUsedLine(credits.amount, creditBalance.available, creditBalance.resets_at, credits.wallet?.orgName) });
         }
 
         const generatedAt = new Date().toISOString();
@@ -1268,6 +1289,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         const structuredContent: Record<string, unknown> = { generatedImage: structuredImage };
         if (credits.refId) {
           structuredContent.credits_used = credits.amount;
+          if (credits.wallet) {
+            structuredContent.credits_wallet = credits.wallet.walletId;
+            if (credits.wallet.orgName) structuredContent.credits_org_name = credits.wallet.orgName;
+          }
           if (creditBalance) {
             structuredContent.credits_left = creditBalance.available;
             structuredContent.credits_resets_at = creditBalance.resets_at;

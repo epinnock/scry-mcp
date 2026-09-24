@@ -1,6 +1,6 @@
 // AI usage credits for scry-mcp (feature ai-credits, plan item 8).
 //
-// generate_image is paid from the caller's wallet (`user:<firebaseUid>`):
+// generate_image is paid from the caller's org wallet (src/wallet.ts, D1 revised):
 //   reserve 40 (fast) / 150 (quality) before Gemini is called
 //   → settle on success (the image was generated; storage failures still count)
 //   → release on failure ("failed, refunded").
@@ -179,11 +179,18 @@ export function insufficientCreditsMessage(
   /** What was refused, e.g. "A quality image", "Image search". */
   what: string,
   pageUrl: string,
+  /** The paying org's name, when known ("Acme is out of AI credits"). */
+  orgName?: string | null,
 ): string {
   const reset = formatResetDate(r.resetsAt);
   const resets = reset ? `, resets ${reset}` : "";
-  if (r.available <= 0) return `You're out of AI credits (0 left${resets}). See ${pageUrl}`;
-  return `Not enough AI credits: ${what} needs ${n(r.needed)} and you have ${n(r.available)} left${resets}. See ${pageUrl}`;
+  if (r.available <= 0) {
+    return orgName
+      ? `${orgName} is out of AI credits (0 left${resets}). See ${pageUrl}`
+      : `You're out of AI credits (0 left${resets}). See ${pageUrl}`;
+  }
+  const who = orgName ? `${orgName} has` : "you have";
+  return `Not enough AI credits: ${what} needs ${n(r.needed)} and ${who} ${n(r.available)} left${resets}. See ${pageUrl}`;
 }
 
 export const IMAGE_LABEL: Readonly<Record<ImageQuality, string>> = {
@@ -191,10 +198,11 @@ export const IMAGE_LABEL: Readonly<Record<ImageQuality, string>> = {
   quality: "A quality image",
 };
 
-/** One line under a generated image, e.g. "Used 40 AI credits · 1,960 left (resets Oct 1)." */
-export function creditsUsedLine(used: number, left: number, resetsAt: string): string {
+/** One line under a generated image, e.g. "Used 40 AI credits · Acme · 1,960 credits left (resets Oct 1)." */
+export function creditsUsedLine(used: number, left: number, resetsAt: string, orgName?: string | null): string {
   const reset = formatResetDate(resetsAt);
-  return `Used ${n(used)} AI credits · ${n(left)} left${reset ? ` (resets ${reset})` : ""}.`;
+  const org = orgName ? `${orgName} · ` : "";
+  return `Used ${n(used)} AI credits · ${org}${n(left)} credits left${reset ? ` (resets ${reset})` : ""}.`;
 }
 
 // ── Gemini usageMetadata ────────────────────────────────────────────────────
