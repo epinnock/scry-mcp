@@ -8,7 +8,18 @@
     // AI credits (feature ai-credits): production stays off until Gate B, then
     // shadow for a week, then enforce. Needs CREDITS_API_URL + the
     // CREDITS_API_TOKEN secret before it leaves "off".
-    "CREDITS_MODE": "off"
+    "CREDITS_MODE": "off",
+    // llm-telemetry ON in production (Gate B 2026-09-24, "turn everything on"): Gemini calls go
+    // through the authenticated scry-prod AI Gateway (needs the CF_AIG_TOKEN secret = prod run
+    // token; delete the line to call Google directly = kill switch). Full Langfuse traces
+    // (project scry-prod) via the diff-service production telemetry queue; "0" stops spans.
+    "LLM_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f54b9c10de9d140756dbf449aa124f1e/scry-prod",
+    "LANGFUSE_ENABLED": "1",
+    "LANGFUSE_SAMPLE_RATE": "1"
+  },
+  // Producer only: the consumer is scry-diff-service-production (src/telemetry/delivery.ts).
+  "queues": {
+    "producers": [{ "binding": "TELEMETRY_QUEUE", "queue": "scry-telemetry-production" }]
   },
   "build": {
     "command": "npm run build:widgets"
@@ -59,7 +70,6 @@
         "CREDITS_PAGE_URL": "https://dashboard-stage.scrymore.com/credits"
       },
       // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).
-      // Production has no queue binding and no gateway until Gate B.
       "queues": {
         "producers": [{ "binding": "TELEMETRY_QUEUE", "queue": "scry-telemetry-staging" }]
       },
