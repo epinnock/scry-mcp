@@ -5,11 +5,11 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
     "SCRY_ENV": "production",
-    // AI credits (Gate B 2026-09-24): shadow for one week (D11, ends 2026-10-01),
-    // then enforce. generate_image holds 40/150 on the caller's wallet in the
+    // AI credits: ENFORCE in production (2026-09-24, founder skipped the shadow week;
+    // rollback "shadow" or "off"). generate_image holds 40/150 on the caller's wallet in the
     // production diff-service ledger; secrets CREDITS_API_TOKEN (= production
     // diff SERVICE_AUTH_TOKEN) and FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY.
-    "CREDITS_MODE": "shadow",
+    "CREDITS_MODE": "enforce",
     "CREDITS_API_URL": "https://scry-diff-service-production.epinnock.workers.dev",
     "CREDITS_PAGE_URL": "https://dashboard.scrymore.com/credits",
     // llm-telemetry ON in production (Gate B 2026-09-24, "turn everything on"): Gemini calls go
