@@ -53,8 +53,8 @@
         "LANGFUSE_SAMPLE_RATE": "1",
         // AI credits: generate_image holds 40/150 on the caller's wallet in the
         // diff-service ledger (needs the CREDITS_API_TOKEN secret = the stage
-        // diff-service SERVICE_AUTH_TOKEN). shadow = ledger written, never refused.
-        "CREDITS_MODE": "shadow",
+        // diff-service SERVICE_AUTH_TOKEN). enforce = refused at zero (402 -> tool error), fails closed on ledger outage.
+        "CREDITS_MODE": "enforce", // stage enforces since Stage 5 UAT (2026-09-24)
         "CREDITS_API_URL": "https://scry-diff-service-staging.epinnock.workers.dev",
         "CREDITS_PAGE_URL": "https://dashboard-stage.scrymore.com/credits"
       },
