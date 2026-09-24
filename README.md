@@ -36,6 +36,7 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `search_components` | Text-based semantic + keyword hybrid search over UI components. `scope: "project"` (default) never widens; `scope: "org"` also returns opted-in, readable sibling projects' rows, marked `crossProject` |
 | `search_by_image` | Visual similarity search using base64 image input; same `scope` semantics |
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
+| `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
 
 ## Usage analytics
@@ -63,7 +64,10 @@ scry-mcp/
 ├── src/
 │   ├── index.ts                # Entry point — OAuthProvider wrapper
 │   ├── firebase-handler.ts     # Auth handler — login UI + Firebase verification
-│   ├── mcp.ts                  # MCP server — 4 Scry search tools
+│   ├── mcp.ts                  # MCP server — 5 tools (search, screenshot, generate_image, whoami)
+│   ├── credits.ts / wallet.ts  # AI-credits hold/settle against the diff-service ledger
+│   ├── llm-gateway.ts          # Cloudflare AI Gateway routing for Gemini
+│   ├── telemetry/              # Langfuse spans -> TELEMETRY_QUEUE producer
 │   └── utils/
 │       └── firebase-verify.ts  # Firebase ID token verification (Workers-compatible)
 ├── test/
@@ -195,13 +199,12 @@ For an authorized manual deploy, `npm run deploy:staging` selects staging and
 worker and stamp flags. Production intentionally has no `env.production` block;
 use a top-level deploy/dry-run, not `--env production`.
 
-After this Phase 1 change merges, create `stage` from the updated `main` and push
-it to trigger the first staging deploy. CI reuses the repository's existing
+CI reuses the repository's existing
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. GitHub deployment environments
 are `staging` and `production`, with their respective worker URLs. The existing
 `staging-OAUTH_KV` namespace is reused, and Wrangler applies migration `v1` to the
 new worker's `ScryMCP` Durable Object; no KV creation or manual DO migration is
-needed. Staging uses workers.dev and has no custom routes.
+needed.
 
 Phase 1 health and OAuth smoke checks work without worker secrets: health reads
 only stamp vars, the provider builds metadata from the request origin and endpoint
@@ -238,11 +241,19 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   CREDITS_API_TOKEN --env staging`). `CREDITS_MODE` (vars) is `off` | `shadow` |
   `enforce`: shadow writes the ledger but never refuses; enforce returns
   `INSUFFICIENT_CREDITS` (no Gemini call) and fails closed with
-  `CREDITS_UNAVAILABLE` when the ledger cannot be reached. Staging is `shadow`,
-  production `off`. The wallet is the caller's org (`org:<users/{uid}.activeOrgId>`
+  `CREDITS_UNAVAILABLE` when the ledger cannot be reached. Staging is `enforce`,
+  production `shadow` (Gate B 2026-09-24; enforce after one week).
+  `CREDITS_API_URL` (the diff-service ledger) and `CREDITS_PAGE_URL` (dashboard
+  `/credits`, linked from the refusal message) are vars in `wrangler.jsonc`. The wallet is the caller's org (`org:<users/{uid}.activeOrgId>`
   if they are in its `memberIds`, else `org:personal_<uid>`), read from Firestore
   with the Firebase Admin service account: set `FIREBASE_CLIENT_EMAIL` and
   `FIREBASE_PRIVATE_KEY` (secrets) from that environment's service-account JSON.
+- LLM telemetry: `LLM_GATEWAY_URL` (vars) routes Gemini through the
+  authenticated AI Gateway (`scry-stage` / `scry-prod`) and needs the `CF_AIG_TOKEN`
+  secret; delete the var to call Google directly (kill switch). `LANGFUSE_ENABLED`
+  / `LANGFUSE_SAMPLE_RATE` control Langfuse spans, which are enqueued on the
+  `TELEMETRY_QUEUE` producer (`scry-telemetry-staging` / `-production`); the
+  consumer is scry-diff-service, which archives to R2 and delivers to Langfuse.
 - In the staging Firebase console, authorize
   `scry-mcp-staging.epinnock.workers.dev` and enable the intended sign-in providers
   (Google and email/password alongside GitHub).
@@ -268,7 +279,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://scry-mcp.<your-account>.workers.dev/mcp"
+        "https://mcp.scrymore.com/mcp"
       ]
     }
   }
@@ -288,7 +299,7 @@ For local development:
 }
 ```
 
-Restart Claude Desktop. On first launch, a browser window opens for Firebase sign-in. After authenticating, the 4 tools appear in Claude's tool picker.
+Restart Claude Desktop. On first launch, a browser window opens for Firebase sign-in. After authenticating, the 5 tools appear in Claude's tool picker.
 
 ## Auth Flow
 
@@ -319,6 +330,12 @@ Claude Desktop        mcp-remote          Worker              Firebase
 - **Presigned URLs**: Time-limited (1 hour), generated server-side. R2 credentials never leave the Next.js service. The presign request carries the caller assertion, so the Next.js service signs only keys the user may read.
 - **Caller identity**: the worker sends `X-Scry-Caller`, an HS256 JWT over `SCRY_CALLER_ASSERTION_SECRET` (`{sub: uid, aud: "scry-search", iat, exp ≤ 60s}`), so the shared `SCRY_SEARCH_API_KEY` cannot be used to impersonate a user. This assertion is the only identity channel: the search API's transition flag is gone, the unsigned `X-User-Id` header is no longer read there, and the worker no longer sends it.
 - **Search scope**: explicit `scope` on both search tools, default `project`, which never widens. `org` returns another project's rows only when that project opted in (`discoverableByOrg`) and the user can read it.
+
+## MCP Registry
+
+`server.json` publishes the server to the MCP registry as
+`io.github.epinnock/scry-mcp` (remote: streamable HTTP at
+`https://mcp.scrymore.com/mcp`).
 
 ## Available Scripts
 
