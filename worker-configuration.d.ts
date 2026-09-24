@@ -27,17 +27,19 @@ declare namespace Cloudflare {
     CF_AIG_TOKEN?: string;
     /** "1" = enqueue full traces for Langfuse on TELEMETRY_QUEUE. */
     LANGFUSE_ENABLED?: string;
-    /** 0..1 share of calls traced (default 1). Adaptive sampling steps it down. */
+    /** 0..1 share of calls traced (default 1). Fallback when the diff-service published rate is unavailable. */
     LANGFUSE_SAMPLE_RATE?: string;
+    /** "0" = kill switch: ignore the diff-service /api/telemetry/sampling rate and use LANGFUSE_SAMPLE_RATE only. */
+    LANGFUSE_DYNAMIC_SAMPLING?: string;
     /** Producer for the diff-service telemetry queue (scry-telemetry-<env>). */
     TELEMETRY_QUEUE?: Queue<import("./src/telemetry/producer").SpansMessage>;
     /** R2 bucket the search API stores generated images in (for scry-r2:// refs). Defaults by SCRY_ENV. */
     SCREENSHOT_BUCKET_NAME?: string;
     /** AI credits (feature ai-credits): off (default) | shadow | enforce. See src/credits.ts. */
     CREDITS_MODE?: string;
-    /** scry-diff-service base URL for /api/credits/* (the ledger). */
+    /** scry-diff-service base URL for /api/credits/* (the ledger) and /api/telemetry/sampling. */
     CREDITS_API_URL?: string;
-    /** scry-diff-service SERVICE_AUTH_TOKEN (secret), sent as a bearer to /api/credits/*. */
+    /** scry-diff-service SERVICE_AUTH_TOKEN (secret), sent as a bearer to /api/credits/* and /api/telemetry/sampling. */
     CREDITS_API_TOKEN?: string;
     /** Credits page linked from INSUFFICIENT_CREDITS (default https://dashboard.scrymore.com/credits). */
     CREDITS_PAGE_URL?: string;

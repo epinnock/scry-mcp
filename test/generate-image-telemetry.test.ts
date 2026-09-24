@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
-import type { SpansMessage } from "../src/telemetry/producer";
+import { resetSampleRateCache, type SpansMessage } from "../src/telemetry/producer";
 
 declare module "cloudflare:test" {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Workers pool environment augmentation.
@@ -62,13 +62,17 @@ function mockUpstreams(gemini: () => Response = () => Response.json({
     { inlineData: { data: "aW1hZ2U=", mimeType: "image/png" } },
   ] } }],
   usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 1290, totalTokenCount: 1299 },
-})) {
+}), sampling: (() => Response) | null = null) {
   const calls: Captured[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     if (url.includes(":generateContent")) {
       calls.push({ url, headers: new Headers(init?.headers), body: String(init?.body ?? "") });
       return gemini();
+    }
+    if (url.endsWith("/api/telemetry/sampling") && sampling) {
+      calls.push({ url, headers: new Headers(init?.headers), body: "" });
+      return sampling();
     }
     if (url.endsWith("/api/image/upload")) return Response.json({ success: true });
     if (url.endsWith("/api/image/presign")) {
@@ -86,7 +90,10 @@ function fakeQueue() {
 const REF = `data:image/png;base64,${"iVBORw0KGgo".repeat(100)}`;
 const call = { name: "generate_image", arguments: { prompt: "A blue button", reference_images: [REF] } };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetSampleRateCache();
+});
 
 describe("generate_image through the AI Gateway", () => {
   it("routes via google-ai-studio with the key in x-goog-api-key and the cf-aig headers", async () => {
@@ -230,5 +237,62 @@ describe("generate_image request body", () => {
       expect((await client.callTool({ name: "generate_image", arguments: { prompt: "banner" } })).isError).not.toBe(true);
     });
     expect(JSON.parse(calls[0].body).generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
+  });
+});
+
+describe("generate_image dynamic Langfuse sample rate", () => {
+  const DIFF = "https://diff.example.test";
+  const dyn = { LANGFUSE_ENABLED: "1", LANGFUSE_SAMPLE_RATE: "1", LANGFUSE_DYNAMIC_SAMPLING: "1", CREDITS_API_URL: DIFF, CREDITS_API_TOKEN: "svc-token" };
+  const rates = (mcp: number | null) => () => Response.json({ v: 1, env: "staging", rates: mcp === null ? null : { diff: 1, indexing: 1, mcp, search: 1 }, step: null, period_start: "2026-09-01", evaluated_at: "x", ttl_s: 300 });
+
+  it("uses the published mcp rate (0 → no spans, fetched once per isolate TTL)", async () => {
+    resetSampleRateCache();
+    const calls = mockUpstreams(undefined, rates(0));
+    const queue = fakeQueue();
+    await withClient({ ...dyn, TELEMETRY_QUEUE: queue as never }, async (client) => {
+      expect((await client.callTool(call)).isError).not.toBe(true);
+      expect((await client.callTool(call)).isError).not.toBe(true);
+    });
+    expect(queue.send).not.toHaveBeenCalled();
+    const sampling = calls.filter((c) => c.url.endsWith("/api/telemetry/sampling"));
+    expect(sampling).toHaveLength(1);
+    expect(sampling[0].url).toBe(`${DIFF}/api/telemetry/sampling`);
+    expect(sampling[0].headers.get("authorization")).toBe("Bearer svc-token");
+  });
+
+  it("rates: null → the env var (1 → traced)", async () => {
+    resetSampleRateCache();
+    mockUpstreams(undefined, rates(null));
+    const queue = fakeQueue();
+    await withClient({ ...dyn, TELEMETRY_QUEUE: queue as never }, async (client) => {
+      expect((await client.callTool(call)).isError).not.toBe(true);
+    });
+    expect(queue.send).toHaveBeenCalledOnce();
+  });
+
+  it("an unreachable endpoint falls back to the env var and never breaks the tool", async () => {
+    resetSampleRateCache();
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockUpstreams(undefined, () => { throw new Error("down"); });
+    const queue = fakeQueue();
+    await withClient({ ...dyn, TELEMETRY_QUEUE: queue as never }, async (client) => {
+      expect((await client.callTool(call)).isError).not.toBe(true);
+    });
+    expect(queue.send).toHaveBeenCalledOnce();
+    err.mockRestore();
+  });
+
+  it("does not fetch the rate when telemetry is off or the kill switch is set", async () => {
+    resetSampleRateCache();
+    const calls = mockUpstreams(undefined, rates(0));
+    const queue = fakeQueue();
+    await withClient({ ...dyn, LANGFUSE_ENABLED: "0", TELEMETRY_QUEUE: queue as never }, async (client) => {
+      expect((await client.callTool(call)).isError).not.toBe(true);
+    });
+    await withClient({ ...dyn, LANGFUSE_DYNAMIC_SAMPLING: "0", TELEMETRY_QUEUE: queue as never }, async (client) => {
+      expect((await client.callTool(call)).isError).not.toBe(true);
+    });
+    expect(calls.filter((c) => c.url.endsWith("/api/telemetry/sampling"))).toHaveLength(0);
+    expect(queue.send).toHaveBeenCalledOnce(); // the kill-switch call, at env rate 1
   });
 });

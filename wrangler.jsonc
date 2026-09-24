@@ -63,7 +63,10 @@
         // Full traces for Langfuse, enqueued on the diff-service telemetry queue
         // (its consumer archives to R2 and delivers). "0" stops producing spans.
         "LANGFUSE_ENABLED": "1",
-        // Adaptive sampling knob (0..1). 100% until the unit budget says otherwise.
+        // Adaptive sampling: the rate is read from the diff-service unit-budget job
+        // (GET CREDITS_API_URL/api/telemetry/sampling, bearer CREDITS_API_TOKEN,
+        // rates.mcp, cached ttl_s). This var (0..1) is the fallback when that is
+        // unavailable or has no evaluation. LANGFUSE_DYNAMIC_SAMPLING="0" = env var only.
         "LANGFUSE_SAMPLE_RATE": "1",
         // AI credits: generate_image holds 40/150 on the caller's wallet in the
         // diff-service ledger (needs the CREDITS_API_TOKEN secret = the stage
