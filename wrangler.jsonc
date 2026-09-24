@@ -5,10 +5,13 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
     "SCRY_ENV": "production",
-    // AI credits (feature ai-credits): production stays off until Gate B, then
-    // shadow for a week, then enforce. Needs CREDITS_API_URL + the
-    // CREDITS_API_TOKEN secret before it leaves "off".
-    "CREDITS_MODE": "off",
+    // AI credits (Gate B 2026-09-24): shadow for one week (D11, ends 2026-10-01),
+    // then enforce. generate_image holds 40/150 on the caller's wallet in the
+    // production diff-service ledger; secrets CREDITS_API_TOKEN (= production
+    // diff SERVICE_AUTH_TOKEN) and FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY.
+    "CREDITS_MODE": "shadow",
+    "CREDITS_API_URL": "https://scry-diff-service-production.epinnock.workers.dev",
+    "CREDITS_PAGE_URL": "https://dashboard.scrymore.com/credits",
     // llm-telemetry ON in production (Gate B 2026-09-24, "turn everything on"): Gemini calls go
     // through the authenticated scry-prod AI Gateway (needs the CF_AIG_TOKEN secret = prod run
     // token; delete the line to call Google directly = kill switch). Full Langfuse traces
