@@ -4,7 +4,11 @@
   "compatibility_date": "2025-03-10",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
-    "SCRY_ENV": "production"
+    "SCRY_ENV": "production",
+    // AI credits (feature ai-credits): production stays off until Gate B, then
+    // shadow for a week, then enforce. Needs CREDITS_API_URL + the
+    // CREDITS_API_TOKEN secret before it leaves "off".
+    "CREDITS_MODE": "off"
   },
   "build": {
     "command": "npm run build:widgets"
@@ -46,7 +50,13 @@
         // (its consumer archives to R2 and delivers). "0" stops producing spans.
         "LANGFUSE_ENABLED": "1",
         // Adaptive sampling knob (0..1). 100% until the unit budget says otherwise.
-        "LANGFUSE_SAMPLE_RATE": "1"
+        "LANGFUSE_SAMPLE_RATE": "1",
+        // AI credits: generate_image holds 40/150 on the caller's wallet in the
+        // diff-service ledger (needs the CREDITS_API_TOKEN secret = the stage
+        // diff-service SERVICE_AUTH_TOKEN). shadow = ledger written, never refused.
+        "CREDITS_MODE": "shadow",
+        "CREDITS_API_URL": "https://scry-diff-service-staging.epinnock.workers.dev",
+        "CREDITS_PAGE_URL": "https://dashboard-stage.scrymore.com/credits"
       },
       // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).
       // Production has no queue binding and no gateway until Gate B.

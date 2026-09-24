@@ -30,6 +30,14 @@ declare namespace Cloudflare {
     TELEMETRY_QUEUE?: Queue<import("./src/telemetry/producer").SpansMessage>;
     /** R2 bucket the search API stores generated images in (for scry-r2:// refs). Defaults by SCRY_ENV. */
     SCREENSHOT_BUCKET_NAME?: string;
+    /** AI credits (feature ai-credits): off (default) | shadow | enforce. See src/credits.ts. */
+    CREDITS_MODE?: string;
+    /** scry-diff-service base URL for /api/credits/* (the ledger). */
+    CREDITS_API_URL?: string;
+    /** scry-diff-service SERVICE_AUTH_TOKEN (secret), sent as a bearer to /api/credits/*. */
+    CREDITS_API_TOKEN?: string;
+    /** Credits page linked from INSUFFICIENT_CREDITS (default https://dashboard.scrymore.com/credits). */
+    CREDITS_PAGE_URL?: string;
     COOKIE_ENCRYPTION_KEY: string;
     DEV_BYPASS_AUTH?: string;
     SCRY_ENV?: "staging" | "production" | "dev";
