@@ -7,6 +7,9 @@ declare namespace Cloudflare {
     FIREBASE_API_KEY: string;
     FIREBASE_AUTH_DOMAIN: string;
     FIREBASE_PROJECT_ID: string;
+    /** Firebase Admin service account (secrets) for the Firestore reads that resolve the credits wallet (src/wallet.ts). */
+    FIREBASE_CLIENT_EMAIL?: string;
+    FIREBASE_PRIVATE_KEY?: string;
     SCRY_SEARCH_API_URL: string;   // Base URL for the Scry Next.js search API (e.g. https://scry.example.com)
     SCRY_SEARCH_API_KEY: string;   // API key for authenticating to the search API
     SCRY_SEARCH_API_BYPASS_TOKEN?: string; // Optional. Vercel automation bypass token for a protected (staging) search API; unset in production

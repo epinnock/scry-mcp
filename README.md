@@ -239,7 +239,10 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   `enforce`: shadow writes the ledger but never refuses; enforce returns
   `INSUFFICIENT_CREDITS` (no Gemini call) and fails closed with
   `CREDITS_UNAVAILABLE` when the ledger cannot be reached. Staging is `shadow`,
-  production `off`.
+  production `off`. The wallet is the caller's org (`org:<users/{uid}.activeOrgId>`
+  if they are in its `memberIds`, else `org:personal_<uid>`), read from Firestore
+  with the Firebase Admin service account: set `FIREBASE_CLIENT_EMAIL` and
+  `FIREBASE_PRIVATE_KEY` (secrets) from that environment's service-account JSON.
 - In the staging Firebase console, authorize
   `scry-mcp-staging.epinnock.workers.dev` and enable the intended sign-in providers
   (Google and email/password alongside GitHub).

@@ -26,6 +26,29 @@ const props: AuthProps = {
 };
 
 const LEDGER = "https://ledger.example.test";
+const FS_PREFIX = "https://firestore.googleapis.com/v1/projects/test-project/databases/(default)/documents/";
+
+/** A throwaway RSA key so the service-account JWT really signs. */
+async function testPrivateKeyPem(): Promise<string> {
+  const pair = (await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  const der = new Uint8Array((await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer);
+  let bin = "";
+  for (const b of der) bin += String.fromCharCode(b);
+  // Stored with literal "\n", as a secret pasted from a service-account JSON is.
+  return `-----BEGIN PRIVATE KEY-----\\n${btoa(bin)}\\n-----END PRIVATE KEY-----`;
+}
+const PRIVATE_KEY = testPrivateKeyPem();
+
+/** Firestore docs by path. Default: active org "acme" (Acme), caller is a member. */
+type Docs = Record<string, Record<string, unknown> | undefined>;
+const defaultDocs = (): Docs => ({
+  "users/credits-test-user": { activeOrgId: { stringValue: "acme" } },
+  "orgs/acme": { name: { stringValue: "Acme" }, memberIds: { arrayValue: { values: [{ stringValue: "credits-test-user" }, { stringValue: "other" }] } } },
+});
 const TOKEN = "test-ledger-token";
 const RESETS = "2026-10-01T00:00:00.000Z";
 
@@ -49,6 +72,9 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       MCP_USAGE: undefined,
       CREDITS_API_URL: LEDGER,
       CREDITS_API_TOKEN: TOKEN,
+      FIREBASE_PROJECT_ID: "test-project",
+      FIREBASE_CLIENT_EMAIL: "sa@test-project.iam.gserviceaccount.com",
+      FIREBASE_PRIVATE_KEY: await PRIVATE_KEY,
       ...overrides,
     });
     agent.props = props;
@@ -107,11 +133,28 @@ function mockUpstreams(opts: {
   ledger?: (path: string, body: Record<string, unknown>) => Response | Promise<Response>;
   gemini?: () => Response;
   search?: () => Response;
+  docs?: Docs;
+  firestoreStatus?: number;
 } = {}) {
   const ledger: Captured[] = [];
   const gemini: string[] = [];
+  const firestore: string[] = [];
+  const tokenRequests: string[] = [];
+  const docs = opts.docs ?? defaultDocs();
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
+    if (url === "https://oauth2.googleapis.com/token") {
+      tokenRequests.push(String(init?.body ?? ""));
+      return Response.json({ access_token: "fs-token", expires_in: 3600 });
+    }
+    if (url.startsWith(FS_PREFIX)) {
+      const path = decodeURIComponent(url.slice(FS_PREFIX.length));
+      firestore.push(path);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fs-token");
+      if (opts.firestoreStatus) return new Response("err", { status: opts.firestoreStatus });
+      const fields = docs[path];
+      return fields ? Response.json({ name: path, fields }) : Response.json({ error: { code: 404 } }, { status: 404 });
+    }
     if (url.startsWith(LEDGER)) {
       const path = url.slice(LEDGER.length);
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -129,7 +172,7 @@ function mockUpstreams(opts: {
     if (url.endsWith("/api/search")) return (opts.search ?? (() => Response.json({ results: [], pagination: { page: 1, limit: 10, total: 0 } })))();
     throw new Error(`Unexpected test fetch: ${url}`);
   });
-  return { ledger, gemini };
+  return { ledger, gemini, firestore, tokenRequests };
 }
 
 const fast = { name: "generate_image", arguments: { prompt: "A blue button" } };
@@ -161,8 +204,10 @@ describe.each(["shadow", "enforce"] as const)("generate_image credits: CREDITS_M
     await withClient({ CREDITS_MODE: mode }, async (client) => {
       const r = await client.callTool(fast);
       expect(r.isError).not.toBe(true);
-      expect(r.structuredContent).toMatchObject({ credits_used: 40, credits_left: 1960, credits_resets_at: RESETS });
-      expect(texts(r)).toContain("Used 40 AI credits · 1,960 left (resets Oct 1).");
+      expect(r.structuredContent).toMatchObject({
+        credits_used: 40, credits_left: 1960, credits_resets_at: RESETS, credits_wallet: "org:acme", credits_org_name: "Acme",
+      });
+      expect(texts(r)).toContain("Used 40 AI credits · Acme · 1,960 credits left (resets Oct 1).");
       const tools = await client.listTools();
       expect(tools.tools.find((t) => t.name === "generate_image")?.description).toContain("40 (fast) or 150 (quality)");
     });
@@ -171,7 +216,7 @@ describe.each(["shadow", "enforce"] as const)("generate_image credits: CREDITS_M
     const [reserve, settle] = ledger;
     expect(reserve.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
     expect(reserve.body).toMatchObject({
-      wallet_id: "user:credits-test-user", task: "mcp.image.fast", quantity: 1, ref_type: "mcp", actor_uid: "credits-test-user",
+      wallet_id: "org:acme", task: "mcp.image.fast", quantity: 1, ref_type: "mcp", actor_uid: "credits-test-user",
     });
     expect(reserve.body.ref_id).toMatch(/^mcp-image:[0-9a-f-]{36}$/);
     expect(settle.body.ref_id).toBe(reserve.body.ref_id);
@@ -246,12 +291,14 @@ describe("generate_image credits: refusals", () => {
       expect(r.isError).toBe(true);
       expect(errorOf(r)).toEqual({
         error: "INSUFFICIENT_CREDITS",
-        message: "You're out of AI credits (0 left, resets Oct 1). See https://dashboard.scrymore.com/credits",
+        message: "Acme is out of AI credits (0 left, resets Oct 1). See https://dashboard.scrymore.com/credits",
         retryable: false,
         needed: 40,
         available: 0,
         resets_at: RESETS,
         credits_url: "https://dashboard.scrymore.com/credits",
+        credits_wallet: "org:acme",
+        credits_org_name: "Acme",
       });
     });
     expect(gemini).toHaveLength(0);
@@ -262,7 +309,7 @@ describe("generate_image credits: refusals", () => {
     const { gemini } = mockUpstreams({ ledger: insufficient(20, 150) });
     await withClient({ CREDITS_MODE: "enforce", CREDITS_PAGE_URL: "https://dashboard-stage.scrymore.com/credits" }, async (client) => {
       expect(errorOf(await client.callTool(qualityCall)).message).toBe(
-        "Not enough AI credits: A quality image needs 150 and you have 20 left, resets Oct 1. See https://dashboard-stage.scrymore.com/credits",
+        "Not enough AI credits: A quality image needs 150 and Acme has 20 left, resets Oct 1. See https://dashboard-stage.scrymore.com/credits",
       );
     });
     expect(gemini).toHaveLength(0);
@@ -285,6 +332,8 @@ describe("generate_image credits: refusals", () => {
     ["network error", { ledger: () => { throw new TypeError("fetch failed"); } }, {}],
     ["CREDITS_API_TOKEN unset", {}, { CREDITS_API_TOKEN: undefined }],
     ["CREDITS_API_URL unset", {}, { CREDITS_API_URL: undefined }],
+    ["Firestore 500 (wallet unresolvable)", { firestoreStatus: 500 }, {}],
+    ["Firestore service account unset", {}, { FIREBASE_PRIVATE_KEY: undefined }],
   ] as const)("enforce fails closed on %s: CREDITS_UNAVAILABLE, no Gemini call", async (_label, upstream, overrides) => {
     const { gemini } = mockUpstreams(upstream as Parameters<typeof mockUpstreams>[0]);
     await withClient({ CREDITS_MODE: "enforce", ...overrides }, async (client) => {
@@ -360,7 +409,7 @@ describe("credits helpers", () => {
   it("formats reset dates and the used line", () => {
     expect(formatResetDate(RESETS)).toBe("Oct 1");
     expect(formatResetDate("nope")).toBe("");
-    expect(creditsUsedLine(150, 1850, "")).toBe("Used 150 AI credits · 1,850 left.");
+    expect(creditsUsedLine(150, 1850, "")).toBe("Used 150 AI credits · 1,850 credits left.");
     expect(insufficientCreditsMessage({ needed: 40, available: 0, resetsAt: "" }, "A fast image", "https://x.test/credits"))
       .toBe("You're out of AI credits (0 left). See https://x.test/credits");
   });
@@ -374,5 +423,84 @@ describe("credits helpers", () => {
     expect(parseGeminiUsage({ promptTokenCount: -1 } as never)).toMatchObject({ inputTokens: 0, imageOutputTokens: null });
     expect(usageReason("m", pro)).toBe("m · 12 in · 1120 out (1120 image) · 300 thinking · 1432 total tokens");
     expect(usageReason("m", null)).toBe("m · tokens not reported");
+  });
+});
+
+describe("generate_image wallet resolution (D1 revised: org wallets, rule 3 without a project)", () => {
+  const reserveWallet = async (docs: Docs, extra: Partial<Env> = {}) => {
+    const up = mockUpstreams({ docs });
+    let structured: Record<string, unknown> = {};
+    let text: (string | undefined)[] = [];
+    await withClient({ CREDITS_MODE: "shadow", ...extra }, async (client) => {
+      const r = await client.callTool(fast);
+      structured = r.structuredContent as Record<string, unknown>;
+      text = texts(r);
+    });
+    return { ...up, wallet: up.ledger[0]?.body.wallet_id, structured, text };
+  };
+
+  it("uses the active org when the caller is a member, reading users/{uid} then orgs/{id} once", async () => {
+    const r = await reserveWallet(defaultDocs());
+    expect(r.wallet).toBe("org:acme");
+    expect(r.firestore).toEqual(["users/credits-test-user", "orgs/acme"]);
+    // The service-account assertion is a JWT bearer grant.
+    expect(r.tokenRequests[0]).toContain("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer");
+  });
+
+  it("falls back to the personal org when the caller is not in the active org's memberIds", async () => {
+    const docs = defaultDocs();
+    docs["orgs/acme"] = { name: { stringValue: "Acme" }, memberIds: { arrayValue: { values: [{ stringValue: "someone-else" }] } } };
+    const r = await reserveWallet(docs);
+    expect(r.wallet).toBe("org:personal_credits-test-user");
+    expect(r.structured).toMatchObject({ credits_wallet: "org:personal_credits-test-user", credits_org_name: "Credits Test's workspace" });
+    expect(r.text).toContain("Used 40 AI credits · Credits Test's workspace · 1,960 credits left (resets Oct 1).");
+  });
+
+  it("falls back to the personal org when activeOrgId is unset or the user doc is missing (no org read)", async () => {
+    const r1 = await reserveWallet({ "users/credits-test-user": {} });
+    expect(r1.wallet).toBe("org:personal_credits-test-user");
+    expect(r1.firestore).toEqual(["users/credits-test-user"]);
+    vi.restoreAllMocks();
+    const r2 = await reserveWallet({});
+    expect(r2.wallet).toBe("org:personal_credits-test-user");
+  });
+
+  it("falls back to the personal org when the active org doc does not exist", async () => {
+    const r = await reserveWallet({ "users/credits-test-user": { activeOrgId: { stringValue: "gone" } } });
+    expect(r.wallet).toBe("org:personal_credits-test-user");
+  });
+
+  it("uses the personal org doc's own name when it is the active org", async () => {
+    const r = await reserveWallet({
+      "users/credits-test-user": { activeOrgId: { stringValue: "personal_credits-test-user" } },
+      "orgs/personal_credits-test-user": { name: { stringValue: "My space" }, memberIds: { arrayValue: { values: [{ stringValue: "credits-test-user" }] } } },
+    });
+    expect(r.wallet).toBe("org:personal_credits-test-user");
+    expect(r.structured).toMatchObject({ credits_org_name: "My space" });
+  });
+
+  it("ignores an activeOrgId that cannot be a wallet id", async () => {
+    const r = await reserveWallet({ "users/credits-test-user": { activeOrgId: { stringValue: "../projects/x" } } });
+    expect(r.wallet).toBe("org:personal_credits-test-user");
+    expect(r.firestore).toEqual(["users/credits-test-user"]);
+  });
+
+  it("caches the resolution for a minute: two images, one pair of Firestore reads", async () => {
+    const up = mockUpstreams();
+    await withClient({ CREDITS_MODE: "shadow" }, async (client) => {
+      await client.callTool(fast);
+      await client.callTool(fast);
+    });
+    expect(up.firestore).toEqual(["users/credits-test-user", "orgs/acme"]);
+    expect(up.tokenRequests).toHaveLength(1);
+    expect(up.ledger.filter((c) => c.path === "/api/credits/reserve").map((c) => c.body.wallet_id)).toEqual(["org:acme", "org:acme"]);
+  });
+
+  it("never reads Firestore with CREDITS_MODE off", async () => {
+    const up = mockUpstreams();
+    await withClient({ CREDITS_MODE: "off" }, async (client) => {
+      await client.callTool(fast);
+    });
+    expect(up.firestore).toHaveLength(0);
   });
 });
