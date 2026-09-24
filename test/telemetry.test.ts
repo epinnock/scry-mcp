@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fnv1a64, spanIdFor, traceIdFor } from "../src/telemetry/ids";
 import { encodeTraceRequest, resourceAttrs, toOtlpSpan } from "../src/telemetry/otlp";
 import {
   enqueueSpans,
   isSampled,
   MAX_MESSAGE_BYTES,
+  resetSampleRateCache,
+  resolveSampleRate,
   sampleRate,
   shouldTrace,
   spansMessage,
@@ -201,5 +203,131 @@ describe("producer", () => {
     expect(await enqueueSpans({ LANGFUSE_ENABLED: "1", TELEMETRY_QUEUE: failing as never }, { runId: RUN, day: "d", spans })).toBe(0);
     expect(err).toHaveBeenCalled();
     err.mockRestore();
+  });
+});
+
+describe("dynamic sample rate (diff-service /api/telemetry/sampling)", () => {
+  const BASE = "https://diff.example.test";
+  const on = {
+    LANGFUSE_ENABLED: "1",
+    LANGFUSE_SAMPLE_RATE: "0.9",
+    TELEMETRY_QUEUE: { send: vi.fn() } as never,
+    CREDITS_API_URL: `${BASE}/`,
+    CREDITS_API_TOKEN: "svc-token",
+  };
+  const published = (rates: Record<string, number> | null, extra: Record<string, unknown> = {}) =>
+    Response.json({ v: 1, env: "staging", rates, step: rates ? 1 : null, period_start: "2026-09-01", evaluated_at: "2026-09-24T00:00:00Z", ttl_s: 300, ...extra });
+
+  let now = 1_000_000;
+  beforeEach(() => {
+    resetSampleRateCache();
+    now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetSampleRateCache();
+  });
+
+  it("uses rates.mcp with the service bearer, and it drives the sampling decision", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(published({ diff: 1, indexing: 1, mcp: 0.2, search: 1 }));
+    expect(await resolveSampleRate(on)).toBe(0.2);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/telemetry/sampling`);
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer svc-token");
+    // RUN's trace id maps to ~0.247: sampled out at 0.2, in at the env 0.9.
+    expect(shouldTrace(on, RUN, 0.2)).toBe(false);
+    expect(shouldTrace(on, RUN)).toBe(true);
+    const queue = { send: vi.fn(async () => {}) };
+    const spans = buildImageSpans(trace());
+    expect(await enqueueSpans({ ...on, TELEMETRY_QUEUE: queue as never }, { runId: RUN, day: "d", spans, rate: 0.2 })).toBe(0);
+    expect(queue.send).not.toHaveBeenCalled();
+  });
+
+  it("clamps the published rate to [0, 1]", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(published({ mcp: 7 }));
+    expect(await resolveSampleRate(on)).toBe(1);
+    resetSampleRateCache();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(published({ mcp: -1 }));
+    expect(await resolveSampleRate(on)).toBe(0);
+  });
+
+  it("rates: null (no current evaluation) or no mcp entry → the env var, cached for ttl_s", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(published(null));
+    expect(await resolveSampleRate(on)).toBe(0.9);
+    expect(await resolveSampleRate(on)).toBe(0.9);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    resetSampleRateCache();
+    fetchSpy.mockResolvedValue(published({ diff: 0.5 }));
+    expect(await resolveSampleRate(on)).toBe(0.9);
+  });
+
+  it("caches for ttl_s, then refetches", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(published({ mcp: 0.5 }, { ttl_s: 120 }))
+      .mockResolvedValueOnce(published({ mcp: 0.25 }));
+    expect(await resolveSampleRate(on)).toBe(0.5);
+    now += 119_000;
+    expect(await resolveSampleRate(on)).toBe(0.5);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    now += 2_000;
+    expect(await resolveSampleRate(on)).toBe(0.25);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("defaults the TTL to 300 s when ttl_s is missing, and shares one in-flight fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(published({ mcp: 0.5 }, { ttl_s: undefined }));
+    const [a, b] = await Promise.all([resolveSampleRate(on), resolveSampleRate(on)]);
+    expect([a, b]).toEqual([0.5, 0.5]);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    now += 299_000;
+    await resolveSampleRate(on);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    now += 2_000;
+    await resolveSampleRate(on);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the env var on network error / non-200 and caches the failure ~60 s; never throws", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
+      .mockResolvedValueOnce(new Response("not json", { status: 200 }))
+      .mockResolvedValue(published({ mcp: 0.1 }));
+    expect(await resolveSampleRate(on)).toBe(0.9);
+    now += 59_000;
+    expect(await resolveSampleRate(on)).toBe(0.9);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    now += 2_000;
+    expect(await resolveSampleRate(on)).toBe(0.9); // 401
+    now += 61_000;
+    expect(await resolveSampleRate(on)).toBe(0.9); // unparseable 200
+    now += 61_000;
+    expect(await resolveSampleRate(on)).toBe(0.1);
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(err).toHaveBeenCalled();
+  });
+
+  it("times out after 1.5 s and falls back", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+    }));
+    const t0 = performance.now();
+    expect(await resolveSampleRate(on)).toBe(0.9);
+    const elapsed = performance.now() - t0;
+    expect(elapsed).toBeLessThan(3_000);
+  });
+
+  it("kill switch, telemetry off, or missing credentials → env var with no fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    for (const v of ["0", "false", "off"]) {
+      expect(await resolveSampleRate({ ...on, LANGFUSE_DYNAMIC_SAMPLING: v })).toBe(0.9);
+    }
+    expect(await resolveSampleRate({ ...on, LANGFUSE_ENABLED: "0" })).toBe(0.9);
+    expect(await resolveSampleRate({ ...on, TELEMETRY_QUEUE: undefined })).toBe(0.9);
+    expect(await resolveSampleRate({ ...on, CREDITS_API_TOKEN: "" })).toBe(0.9);
+    expect(await resolveSampleRate({ ...on, CREDITS_API_URL: undefined })).toBe(0.9);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,7 @@ import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-as
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
-import { enqueueSpans, envName, shouldTrace, utcDay } from "./telemetry/producer";
+import { enqueueSpans, envName, resolveSampleRate, shouldTrace, utcDay } from "./telemetry/producer";
 import {
   CreditsClient,
   CreditsUnavailableError,
@@ -151,18 +151,24 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   /**
    * Enqueue the spans of one generate_image call for Langfuse (store-and-forward
    * via the diff-service telemetry queue). Sampled; never throws, never blocks
-   * the tool result on anything slower than a queue send.
+   * the tool result on anything slower than a queue send. `rate` is the
+   * sample-rate resolution started at tool entry (it runs alongside the Gemini
+   * call, so it adds no latency on the success path); it never rejects.
    */
-  private async traceImageCall(t: Omit<ImageCallTrace, "userId" | "envName" | "commit">): Promise<void> {
+  private async traceImageCall(
+    t: Omit<ImageCallTrace, "userId" | "envName" | "commit">,
+    rate: Promise<number> = resolveSampleRate(this.env),
+  ): Promise<void> {
     try {
-      if (!shouldTrace(this.env, t.runId)) return;
+      const resolved = await rate;
+      if (!shouldTrace(this.env, t.runId, resolved)) return;
       const spans = buildImageSpans({
         ...t,
         userId: this.props?.firebaseUid ?? null,
         envName: envName(this.env),
         commit: this.env.SCRY_COMMIT ?? null,
       });
-      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans });
+      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans, rate: resolved });
     } catch (err) {
       this.logDiagnostic("traceImageCall", { requestId: t.runId, error: String(err) });
     }
@@ -1142,6 +1148,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         // One id per paid call: the gateway `run` tag, the trace id and the log correlation key.
         const requestId = crypto.randomUUID();
         const trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: requestId };
+        // Start resolving the Langfuse sample rate now (cached per isolate; at most
+        // ~1.5 s on a cache miss, in parallel with credits + Gemini). Never rejects.
+        const sampleRateP = resolveSampleRate(this.env);
         const traceBase = {
           prompt,
           quality: quality || "fast",
@@ -1160,7 +1169,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         const creditQuality: ImageQuality = quality === "quality" ? "quality" : "fast";
         const credits = await this.reserveImageCredits(creditQuality, requestId);
         if (!credits.ok) {
-          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: undefined, outputRef: null, presigned: false, outcome: credits.code });
+          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: undefined, outputRef: null, presigned: false, outcome: credits.code }, sampleRateP);
           return credits.result;
         }
 
@@ -1189,7 +1198,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             result = this.toolError(code, error.message, retryable);
           }
           if (credits.refId) await this.releaseImageCredits(credits.refId, requestId);
-          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: trace.call, outputRef: null, presigned: false, outcome: code });
+          await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: trace.call, outputRef: null, presigned: false, outcome: code }, sampleRateP);
           return result;
         }
 
@@ -1238,7 +1247,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           outputRef: r2Ref(this.env, uploadedKey),
           presigned: !!presignResult,
           outcome: "ok",
-        });
+        }, sampleRateP);
 
         // Step 4: Build dual-format response
         const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];

@@ -254,6 +254,14 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   / `LANGFUSE_SAMPLE_RATE` control Langfuse spans, which are enqueued on the
   `TELEMETRY_QUEUE` producer (`scry-telemetry-staging` / `-production`); the
   consumer is scry-diff-service, which archives to R2 and delivers to Langfuse.
+  Sampling is adaptive: when telemetry is on, the Worker reads its rate
+  (`rates.mcp`) from the diff-service unit-budget job at
+  `GET $CREDITS_API_URL/api/telemetry/sampling` (bearer `CREDITS_API_TOKEN`, the
+  same service credentials as credits; no extra secret), cached per isolate for
+  the response's `ttl_s` (default 300 s). On a timeout (1.5 s), error, non-200 or
+  `rates: null` it falls back to `LANGFUSE_SAMPLE_RATE` (failures are cached for
+  60 s). Set `LANGFUSE_DYNAMIC_SAMPLING=0` to use the env var only. The sampling
+  decision stays deterministic per run id.
 - In the staging Firebase console, authorize
   `scry-mcp-staging.epinnock.workers.dev` and enable the intended sign-in providers
   (Google and email/password alongside GitHub).
