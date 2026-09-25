@@ -20,6 +20,13 @@ declare namespace Cloudflare {
      * fail closed with SERVER_MISCONFIGURED rather than searching anonymously.
      */
     SCRY_CALLER_ASSERTION_SECRET?: string;
+    /**
+     * Secret shared ONLY with the dashboard (its SCRY_AGENT_ASSERTION_SECRET)
+     * that signs X-Scry-Caller for aud "scry-dashboard-agent" (D-SEC-1). The
+     * issue tools fail closed with SERVER_MISCONFIGURED when it is unset; they
+     * never fall back to SCRY_CALLER_ASSERTION_SECRET.
+     */
+    SCRY_AGENT_ASSERTION_SECRET?: string;
     /** Dashboard base URL for the issue tools' /api/agent/issues/* (feature issue-resolution). */
     SCRY_DASHBOARD_API_URL?: string;
     /** Optional. Vercel automation bypass token for the protected stage dashboard; unset in production. */

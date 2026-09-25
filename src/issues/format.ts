@@ -23,7 +23,7 @@ export function mapApiError(status: number, body: Json): { code: string; message
     case 400:
       return { code: "INVALID_ARGUMENT", message: `Scry rejected the request: ${upstream || "bad request"}${tail}.`, retryable: false, detail };
     case 401:
-      return { code: "SERVER_MISCONFIGURED", message: "The dashboard did not accept this MCP server's caller assertion. Ask the Scry operator to check SCRY_CALLER_ASSERTION_SECRET on both services.", retryable: false, detail };
+      return { code: "SERVER_MISCONFIGURED", message: "The dashboard did not accept this MCP server's caller assertion. Ask the Scry operator to check SCRY_AGENT_ASSERTION_SECRET on both services.", retryable: false, detail };
     case 402:
       return { code: "INSUFFICIENT_CREDITS", message: `The project's organisation does not have enough AI credits for a full re-diff (10 credits)${tail}. Run request_verify without rediff (free) or top up credits.`, retryable: false, detail };
     case 403:

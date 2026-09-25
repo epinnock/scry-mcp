@@ -34,6 +34,7 @@ export const CALLER_ASSERTION_TTL_S = 60;
  * issue-resolution). Distinct from the search audience so an assertion minted
  * for one service cannot be replayed at the other. The dashboard also reads
  * `agent_client` from the signed claims (audit label only, never a permission).
+ * Signed with SCRY_AGENT_ASSERTION_SECRET (D-SEC-1), never the search secret.
  */
 export const DASHBOARD_AGENT_AUDIENCE = "scry-dashboard-agent";
 
@@ -55,7 +56,13 @@ export async function mintCallerAssertion(
   now: Date = new Date(),
   options: AssertionOptions = {},
 ): Promise<string> {
-  if (!secret) throw new Error("SCRY_CALLER_ASSERTION_SECRET is not configured");
+  if (!secret) {
+    throw new Error(
+      options.audience === DASHBOARD_AGENT_AUDIENCE
+        ? "SCRY_AGENT_ASSERTION_SECRET is not configured"
+        : "SCRY_CALLER_ASSERTION_SECRET is not configured",
+    );
+  }
   if (!uid) throw new Error("Cannot mint a caller assertion without a user id");
 
   const iat = Math.floor(now.getTime() / 1000);
