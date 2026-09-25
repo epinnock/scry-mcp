@@ -18,7 +18,14 @@
     // (project scry-prod) via the diff-service production telemetry queue; "0" stops spans.
     "LLM_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f54b9c10de9d140756dbf449aa124f1e/scry-prod",
     "LANGFUSE_ENABLED": "1",
-    "LANGFUSE_SAMPLE_RATE": "1"
+    "LANGFUSE_SAMPLE_RATE": "1",
+    // Issue resolution ON in production (Gate B 2026-09-25, "ship it"): the six issue tools call
+    // the production dashboard's /api/agent/issues/* with a signed X-Scry-Caller (aud
+    // scry-dashboard-agent, secret SCRY_AGENT_ASSERTION_SECRET = dashboard prod value).
+    // No bypass token in production. Kill switch: set ISSUE_TOOLS_ENABLED to "0" (tools off
+    // unless exactly "1").
+    "ISSUE_TOOLS_ENABLED": "1",
+    "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
   },
   // Producer only: the consumer is scry-diff-service-production (src/telemetry/delivery.ts).
   "queues": {
