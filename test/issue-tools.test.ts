@@ -362,7 +362,7 @@ describe("request_verify", () => {
     const calls = mockDashboard(() => Response.json({ ran: false, reason: "no_new_input", waiting: [{ issue_id: 42, side: "code", status: "fixed", hint: "next Storybook build" }] }));
     await withClient({}, async (client) => {
       const t = text(await client.callTool({ name: "request_verify", arguments: { project_id: "proj-1", link_id: "link-9", rediff: true } }));
-      expect(t).toContain("No re-check ran: no_new_input");
+      expect(t).toContain("No re-check ran — no_new_input");
     });
     expect(new URL(calls[0].url).pathname).toBe("/api/agent/issues/request-verify");
     expect(calls[0].body).toEqual({ project_id: "proj-1", link_id: "link-9", rediff: true });

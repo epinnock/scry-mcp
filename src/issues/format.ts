@@ -14,7 +14,7 @@ const arr = (v: unknown): Json[] => (Array.isArray(v) ? v.filter(x => x && typeo
 export function mapApiError(status: number, body: Json): { code: string; message: string; retryable: boolean; detail: Json } {
   const upstream = s(body.error) ?? "";
   const detail: Json = {};
-  for (const k of ["claimed_by", "claimed_kind", "claim_expires_at", "side_status", "allowed_from", "retry_after_seconds", "window", "limit", "quota", "needed", "available", "stage"]) {
+  for (const k of ["claimed_by", "claimed_kind", "claimed_name", "claim_expires_at", "side_status", "allowed_from", "retry_after_seconds", "window", "limit", "quota", "needed", "available", "stage"]) {
     if (body[k] !== undefined) detail[k] = body[k];
   }
   const said = s(body.detail) ?? s(body.message);
@@ -34,8 +34,9 @@ export function mapApiError(status: number, body: Json): { code: string; message
       return { code: "NOT_FOUND", message: "No such issue in a project you can access. Agents only see issues a human has promoted (open, awaiting verify or closed).", retryable: false, detail };
     case 409: {
       if (upstream === "claimed") {
-        const who = s(body.claimed_by) ?? "someone else";
-        return { code: "CLAIMED", message: `This side is claimed by ${who} (${s(body.claimed_kind) ?? "user"}) until ${s(body.claim_expires_at) ?? "the lease expires"}. Pick another issue or try after the lease ends.`, retryable: true, detail };
+        // The holder is a uid; a claim by your own user (in the dashboard or another agent session) is never CLAIMED.
+        const who = s(body.claimed_name) ?? "another user";
+        return { code: "CLAIMED", message: `This side is claimed by ${who} (${s(body.claimed_kind) === "agent" ? "their agent" : "in the dashboard"}) until ${s(body.claim_expires_at) ?? "the lease expires"}. Pick another issue or try after the lease ends.`, retryable: true, detail };
       }
       if (upstream === "fix_side_undecided") {
         return { code: "FIX_SIDE_UNDECIDED", message: "No human has decided whether this is fixed in code or in design yet. Propose a side with comment_design_issue(propose_fix_side) and wait for a human.", retryable: false, detail };
@@ -54,10 +55,38 @@ export function mapApiError(status: number, body: Json): { code: string; message
   }
 }
 
+const COMMIT_PATH = /\/(?:-\/)?commits?\/[0-9a-f]{7,40}(?:\/|$)/i;
+const PR_PATH = /\/(?:pull|pulls|pull-requests)\/\d+(?:\/|$)|\/-\/merge_requests\/\d+(?:\/|$)/i;
+
+/**
+ * What a fix reference opens: "PR" | "Commit" | "Figma version" | "Synced" | "Link".
+ * From the URL first, so a commit URL stored as "pr" (before the diff-service
+ * fix) still reads "Commit". The dashboard's ref_label_kind wins when present.
+ */
+export function refLabelKind(url: string | undefined, kind: string | undefined, given?: string): string | undefined {
+  if (given) return given;
+  if (kind === "synced") return "Synced";
+  if (!url) return undefined;
+  if (kind === "figma_version") return "Figma version";
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return /^[0-9a-f]{7,40}$/i.test(url) || kind === "commit" ? "Commit" : "Link";
+  }
+  if (COMMIT_PATH.test(path)) return "Commit";
+  if (PR_PATH.test(path)) return "PR";
+  return "Link";
+}
+
 function trackLine(t: Json): string {
   const parts = [`${s(t.side) ?? "?"}: ${s(t.status) ?? "?"}`];
-  if (s(t.claimed_by)) parts.push(`claimed by ${s(t.claimed_by)}${s(t.claimed_kind) === "agent" ? " (agent)" : ""} until ${s(t.claim_expires_at) ?? "?"}`);
-  if (s(t.ref_url)) parts.push(`ref ${s(t.ref_kind) ?? ""} ${s(t.ref_url)}`.replace(/\s+/g, " "));
+  if (s(t.claimed_by)) {
+    parts.push(`claimed by ${s(t.claimed_name) ?? "a user"}${s(t.claimed_kind) === "agent" ? " (agent)" : " (dashboard)"} until ${s(t.claim_expires_at) ?? "?"}`);
+  }
+  const refKind = refLabelKind(s(t.ref_url), s(t.ref_kind), s(t.ref_label_kind));
+  if (refKind === "Synced") parts.push("ref Synced from Scry Link");
+  else if (s(t.ref_url)) parts.push(`ref ${refKind ?? "Link"} ${s(t.ref_url)}`);
   if (s(t.last_verdict)) parts.push(`last verdict ${s(t.last_verdict)}${s(t.last_verdict_reason) ? ` — ${s(t.last_verdict_reason)}` : ""}`);
   return parts.join(" · ");
 }
@@ -160,10 +189,13 @@ export function formatWrite(verb: string, data: Json): string {
 export function formatVerify(data: Json): string {
   const lines: string[] = [];
   if (data.ran === false) {
-    lines.push(`No re-check ran: ${s(data.reason) ?? "nothing new to judge"} (quota not spent).`);
+    // The Worker always says why (no_new_input | nothing_to_judge | no_open_issues).
+    const why = [s(data.reason), s(data.reason_detail)].filter(Boolean).join(": ");
+    lines.push(`No re-check ran — ${why || "no new input"} (quota not spent).`);
   } else {
     lines.push(`Re-check ran${s(data.run_id) ? ` (run ${s(data.run_id)})` : ""}.`);
-    for (const v of arr(data.verdicts)) lines.push(`  - issue ${s(v.issue_id) ?? "?"}: ${s(v.verdict)}${s(v.reason) ? ` — ${s(v.reason)}` : ""}`);
+    for (const v of arr(data.verdicts)) lines.push(`  - issue ${s(v.issue_id) ?? s(v.id) ?? "?"}: ${s(v.verdict)}${s(v.reason) ? ` — ${s(v.reason)}` : ""}`);
+    for (const n of Array.isArray(data.notes) ? data.notes : []) if (s(n)) lines.push(`  note: ${s(n)}`);
     const moved = obj(data.tracks_moved);
     if (moved) for (const [id, m] of Object.entries(moved)) lines.push(`  - issue ${id} tracks moved: ${arr(m).map(x => `${s(x.side)}→${s(x.to)}`).join(", ")}`);
   }

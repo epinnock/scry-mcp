@@ -178,7 +178,8 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
       description: [
         "Claim the code or design side of a promoted issue before working on it, so other agents and people see it is taken.",
         "Moves that side to in_progress for a 15-minute lease; call again to renew while you work, or release: true to give it back.",
-        "Fails with CLAIMED (claimed_by, claim_expires_at) when someone else holds it, FIX_SIDE_UNDECIDED when no human chose code/design yet,",
+        "The holder is your user (uid): a claim your user made in the dashboard, or another of their agent sessions, is yours to continue.",
+        "Fails with CLAIMED (claimed_by uid, claimed_name, claim_expires_at) when a different user holds it, FIX_SIDE_UNDECIDED when no human chose code/design yet,",
         "SIDE_NOT_REQUIRED when the issue does not need that side. Returns the issue status and all tracks.",
         ERRORS_DOC,
       ].join(" "),
@@ -201,7 +202,7 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
       description: [
         "Record that you fixed the code or design side of a promoted issue. The side becomes fixed (awaiting verify) and your claim is cleared;",
         "it does not close the issue — Scry verifies it by re-checking the next input (code: next Storybook build; design: next Figma render).",
-        "Code: ref_url = the pull request URL (ref_kind pr, default) or ref_kind commit with a commit sha.",
+        "Code: ref_url = the pull request URL or a commit URL / sha; the kind (PR | Commit | Link) follows the URL, ref_kind is optional.",
         "Design: ref_url = Figma version link (ref_kind figma_version, default), a numeric Figma version id, or ref_kind synced with no URL.",
         "Returns the tracks and a verify_hint saying what will verify it. Then call request_verify to re-check now.",
         ERRORS_DOC,
@@ -239,7 +240,8 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
         "Returns verdicts (matches | still_drifts with a reason), which tracks moved (matches → verified; still_drifts → back to todo),",
         "what is still waiting for new input, and the remaining quota. A re-check is free but capped at 20 per project per hour and 200 per day (VERIFY_RATE_LIMITED).",
         "rediff: true runs a full new comparison instead: 10 AI credits from the project's organisation wallet (INSUFFICIENT_CREDITS when short). Use it only when asked.",
-        "When nothing new can be judged it returns ran: false and spends no quota.",
+        "When nothing runs it returns ran: false with a reason (no_new_input | nothing_to_judge | no_open_issues) and spends no quota.",
+        "An issue without a location box is re-checked across the whole screen from its note (reported in notes / screen_level).",
         ERRORS_DOC,
       ].join(" "),
       inputSchema: {
