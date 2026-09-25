@@ -10,7 +10,9 @@ import {
 import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
-import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-assertion.js";
+import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE } from "./utils/caller-assertion.js";
+import { DashboardAgentClient, SlidingWindowLimiter, agentClientLabel } from "./issues/client";
+import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
@@ -117,6 +119,32 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   // One Durable Object instance serves one user, so a per-instance cache of
   // the short-lived assertion is per-user by construction.
   private callerAssertion = new CallerAssertionCache();
+
+  // --- Issue tools (feature issue-resolution): MCP → dashboard /api/agent/issues/* ---
+  private dashboardAssertion = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
+  private issueWriteLimiter = new SlidingWindowLimiter(ISSUE_WRITE_RATE_LIMIT_RPM);
+
+  /**
+   * Client for the dashboard's agent issue API, or null when unconfigured.
+   * `agent_client` is the name the MCP client reported at initialize (e.g.
+   * "claude-code"); it rides inside the signed assertion so the dashboard can
+   * record it, and it is only ever an audit label, never a permission.
+   */
+  private dashboardAgentClient(): DashboardAgentClient | null {
+    const baseUrl = this.env.SCRY_DASHBOARD_API_URL?.trim();
+    if (!baseUrl || !this.env.SCRY_CALLER_ASSERTION_SECRET) return null;
+    return new DashboardAgentClient({
+      baseUrl,
+      bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
+      assertion: () => this.dashboardAssertion.get(
+        this.env.SCRY_CALLER_ASSERTION_SECRET,
+        this.props.firebaseUid,
+        new Date(),
+        { agent_client: agentClientLabel(this.server.server.getClientVersion()) },
+      ),
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
+  }
 
   /**
    * Headers that tell the search API who this request is for.
@@ -1314,6 +1342,17 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
       }
     );
+
+    // --- Issue resolution tools (list/get/claim/mark fixed/request verify/comment) ---
+    // Off unless ISSUE_TOOLS_ENABLED="1" (stage first; production at Gate B).
+    if (this.env.ISSUE_TOOLS_ENABLED === "1") {
+      registerIssueTools(this.server, {
+        client: () => this.dashboardAgentClient(),
+        checkRateLimit: () => this.checkRateLimit(),
+        writeLimiter: this.issueWriteLimiter,
+        log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
+      });
+    }
 
     // --- whoami: authenticated user info ---
     this.server.tool(

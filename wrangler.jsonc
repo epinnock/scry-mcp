@@ -73,7 +73,13 @@
         // diff-service SERVICE_AUTH_TOKEN). enforce = refused at zero (402 -> tool error), fails closed on ledger outage.
         "CREDITS_MODE": "enforce", // stage enforces since Stage 5 UAT (2026-09-24)
         "CREDITS_API_URL": "https://scry-diff-service-staging.epinnock.workers.dev",
-        "CREDITS_PAGE_URL": "https://dashboard-stage.scrymore.com/credits"
+        "CREDITS_PAGE_URL": "https://dashboard-stage.scrymore.com/credits",
+        // Issue resolution (feature issue-resolution item 6): the six issue tools call the
+        // stage dashboard's /api/agent/issues/* with a signed X-Scry-Caller (aud
+        // scry-dashboard-agent). Stage dashboard is behind Vercel protection: secret
+        // SCRY_DASHBOARD_BYPASS_TOKEN. Production keeps the tools off until Gate B.
+        "ISSUE_TOOLS_ENABLED": "1",
+        "SCRY_DASHBOARD_API_URL": "https://dashboard-stage.scrymore.com"
       },
       // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).
       "queues": {

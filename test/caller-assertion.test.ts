@@ -7,6 +7,7 @@ import {
   CALLER_ASSERTION_ISSUER,
   CALLER_ASSERTION_TTL_S,
   CALLER_ASSERTION_HEADER,
+  DASHBOARD_AGENT_AUDIENCE,
 } from "../src/utils/caller-assertion";
 
 /**
@@ -94,5 +95,29 @@ describe("CallerAssertionCache", () => {
     await expect(cache.get(undefined, "uid")).rejects.toThrow();
     // Once configured, it works.
     await expect(cache.get(SECRET, "uid")).resolves.toMatch(/^eyJ/);
+  });
+});
+
+describe("dashboard-agent assertions (issue-resolution)", () => {
+  it("mints for the given audience with extra claims, without letting them override registered claims", async () => {
+    const token = await mintCallerAssertion(SECRET, "uid-9", new Date(), {
+      audience: DASHBOARD_AGENT_AUDIENCE,
+      claims: { agent_client: "claude-code", sub: "someone-else", aud: "scry-search" },
+    });
+    const { payload } = await jwtVerify(token, key, { audience: DASHBOARD_AGENT_AUDIENCE, issuer: CALLER_ASSERTION_ISSUER });
+    expect(payload.sub).toBe("uid-9");
+    expect(payload.agent_client).toBe("claude-code");
+    expect(payload.aud).toBe(DASHBOARD_AGENT_AUDIENCE);
+  });
+
+  it("re-mints when the claims change and reuses the token when they do not", async () => {
+    const cache = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
+    const now = new Date("2026-09-25T00:00:00Z");
+    const a = await cache.get(SECRET, "uid", now, { agent_client: "a" });
+    const a2 = await cache.get(SECRET, "uid", now, { agent_client: "a" });
+    const b = await cache.get(SECRET, "uid", now, { agent_client: "b" });
+    expect(a2).toBe(a);
+    expect(b).not.toBe(a);
+    expect(decodeJwt(b).agent_client).toBe("b");
   });
 });
