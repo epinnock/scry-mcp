@@ -111,7 +111,7 @@ export function formatIssue(data: Json): string {
     s(design.figma_url) && `  ${s(design.figma_url)}`,
     s(design.figma_version) && `  file version ${s(design.figma_version)}`,
     dImg && `  crop:${box(dImg)}${s(dImg.url) ? ` ${s(dImg.url)}` : ""}`,
-    design.layer_subtree !== undefined && `  layer subtree: ${JSON.stringify(design.layer_subtree).slice(0, 4000)}`,
+    design.layer_subtree != null && `  layer subtree: ${JSON.stringify(design.layer_subtree).slice(0, 4000)}`,
   ].filter(Boolean).join("\n"));
   const cImg = obj(code.image);
   out.push([
@@ -120,7 +120,7 @@ export function formatIssue(data: Json): string {
     s(code.component_file) && `  component_file ${s(code.component_file)}`,
     s(code.story_file) && `  story_file ${s(code.story_file)}`,
     s(code.repository) && `  repository ${s(code.repository)}`,
-    (s(code.build_id) || s(code.build_sha)) && `  build ${s(code.build_id) ?? "?"} · ${s(code.build_sha) ?? "?"}${s(code.branch) ? ` on ${s(code.branch)}` : ""}`,
+    (s(code.build_id) || s(code.build_sha)) && `  build ${[s(code.build_id), s(code.build_sha) && `sha ${s(code.build_sha)}`].filter(Boolean).join(" · ")}${s(code.branch) ? ` on ${s(code.branch)}` : ""}`,
     s(code.storybook_url) && `  ${s(code.storybook_url)}`,
     cImg && `  crop:${box(cImg)}${s(cImg.url) ? ` ${s(cImg.url)}` : ""}`,
     s(code.source_excerpt) && `  source excerpt:\n${s(code.source_excerpt)}`,
@@ -139,7 +139,10 @@ export function formatIssue(data: Json): string {
     out.push("Timeline (latest last):");
     for (const e of tl.slice(-10)) {
       const a = obj(e.actor) ?? {};
-      const who = s(a.agent_client) ? `${s(a.agent_client)} (for ${s(a.name) ?? s(a.id)})` : s(a.name) ?? `${s(a.kind) ?? "?"}`;
+      const p = obj(e.payload);
+      const who = s(a.agent_client)
+        ? `${s(a.agent_client)} (for ${s(p?.actor_name) ?? s(a.id) ?? "?"})`
+        : s(a.name) ?? s(p?.actor_name) ?? `${s(a.kind) ?? "?"}`;
       out.push(`  ${s(e.at) ?? ""} ${s(e.type)} by ${who}`);
     }
   }

@@ -1,5 +1,6 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InitializeRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import {
@@ -35,6 +36,8 @@ import {
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+/** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
+const CLIENT_INFO_KEY = "mcpClientInfo";
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
@@ -130,17 +133,33 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
    * "claude-code"); it rides inside the signed assertion so the dashboard can
    * record it, and it is only ever an audit label, never a permission.
    */
+  /**
+   * The MCP client's name for the audit trail. The SDK keeps clientInfo only in
+   * memory, and this Durable Object hibernates between requests, so the name
+   * seen at initialize is also persisted (the DO is per MCP session).
+   */
+  private async agentClient(): Promise<string> {
+    const live = this.server.server.getClientVersion();
+    if (live) return agentClientLabel(live);
+    try {
+      const stored = await this.ctx.storage.get<{ name?: string; title?: string }>(CLIENT_INFO_KEY);
+      return agentClientLabel(stored);
+    } catch {
+      return agentClientLabel(undefined);
+    }
+  }
+
   private dashboardAgentClient(): DashboardAgentClient | null {
     const baseUrl = this.env.SCRY_DASHBOARD_API_URL?.trim();
     if (!baseUrl || !this.env.SCRY_CALLER_ASSERTION_SECRET) return null;
     return new DashboardAgentClient({
       baseUrl,
       bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
-      assertion: () => this.dashboardAssertion.get(
+      assertion: async () => this.dashboardAssertion.get(
         this.env.SCRY_CALLER_ASSERTION_SECRET,
         this.props.firebaseUid,
         new Date(),
-        { agent_client: agentClientLabel(this.server.server.getClientVersion()) },
+        { agent_client: await this.agentClient() },
       ),
       timeoutMs: REQUEST_TIMEOUT_MS,
     });
@@ -1342,6 +1361,20 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
       }
     );
+
+    // Persist the client's self-reported name (see agentClient()) at initialize
+    // itself: the DO can hibernate before notifications/initialized arrives, so
+    // oninitialized may run on an instance that never saw clientInfo. The SDK's
+    // own handler (_oninitialize, not public API) still answers the request.
+    const sdkServer = this.server.server as unknown as { _oninitialize(r: unknown): Promise<unknown> };
+    this.server.server.setRequestHandler(InitializeRequestSchema, async (request) => {
+      const info = request.params.clientInfo as { name?: string; title?: string } | undefined;
+      if (info) {
+        await this.ctx.storage.put(CLIENT_INFO_KEY, { name: info.name, title: info.title })
+          .catch((err: unknown) => this.logDiagnostic("clientInfo", { error: String(err) }));
+      }
+      return sdkServer._oninitialize(request) as never;
+    });
 
     // --- Issue resolution tools (list/get/claim/mark fixed/request verify/comment) ---
     // Off unless ISSUE_TOOLS_ENABLED="1" (stage first; production at Gate B).

@@ -90,7 +90,10 @@ const PAYLOAD = {
   expected: { from: "code", property: "fill", value: "#6366F1", actual: "#5B5BD6" },
   design: { actionable: true, figma_file_key: "FILEKEY", figma_node_id: "12:34", node_name: "Button", figma_url: "https://www.figma.com/design/FILEKEY?node-id=12-34", image: { url: "https://img.example.test/a.png", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 } } },
   code: { story_id: "checkout-summarycard--default", component_file: "src/components/SummaryCard.tsx", story_file: "src/components/SummaryCard.stories.tsx", build_sha: "a41f9c2", image: { data: "aW1n", mime_type: "image/png", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.1 } } },
-  timeline: [{ type: "promoted", actor: { kind: "user", id: "u9", name: "Ben" }, at: "2026-09-24T23:00:00Z" }],
+  timeline: [
+    { type: "promoted", actor: { kind: "user", id: "u9", name: "Ben" }, at: "2026-09-24T23:00:00Z" },
+    { type: "side_claimed", actor: { kind: "agent", id: "agent-user-1", name: "claude-code", agent_client: "claude-code" }, payload: { actor_name: "Ana" }, at: "2026-09-25T00:00:00Z" },
+  ],
 };
 
 afterEach(() => vi.restoreAllMocks());
@@ -218,7 +221,8 @@ describe("get_design_issue", () => {
       const r = await client.callTool({ name: "get_design_issue", arguments: { issue_id: 42 } });
       expect(r.isError).not.toBe(true);
       const t = text(r);
-      for (const s of ["FILEKEY", "12:34", "src/components/SummaryCard.tsx", "checkout-summarycard--default", "fill = #6366F1", "actual #5B5BD6", "Figma's own MCP", "open a pull request", "still_drifts", "AI hint"]) expect(t).toContain(s);
+      for (const s of ["FILEKEY", "12:34", "src/components/SummaryCard.tsx", "checkout-summarycard--default", "fill = #6366F1", "actual #5B5BD6", "Figma's own MCP", "open a pull request", "still_drifts", "AI hint", "promoted by Ben", "side_claimed by claude-code (for Ana)", "sha a41f9c2"]) expect(t).toContain(s);
+      expect(t).not.toContain("layer subtree");
       const images = (r.content as Array<{ type: string }>).filter(c => c.type === "image");
       expect(images).toHaveLength(2);
     });
@@ -385,6 +389,33 @@ describe("upstream failures", () => {
     await withClient({}, async (client) => {
       const r = await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
       expect(errorOf(r).error).toBe("SERVER_MISCONFIGURED");
+    });
+  });
+});
+
+describe("agent_client survives hibernation", () => {
+  it("persists clientInfo at initialize and reads it back on a fresh instance", async () => {
+    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.newUniqueId());
+    await runInDurableObject(stub, async (_instance, state) => {
+      const bindings = { ...env, SCRY_CALLER_ASSERTION_SECRET: SECRET, MCP_USAGE: undefined, ISSUE_TOOLS_ENABLED: "1", SCRY_DASHBOARD_API_URL: DASH } as Env;
+      const first = new TestScryMCP(state, bindings);
+      first.props = props;
+      await first.init();
+      const client = new Client({ name: "claude-code", version: "2.1.0" });
+      const [ct, st] = InMemoryTransport.createLinkedPair();
+      await first.server.connect(st);
+      await client.connect(ct);
+      await vi.waitFor(async () => expect(await state.storage.get("mcpClientInfo")).toMatchObject({ name: "claude-code" }));
+      await client.close();
+      await first.server.close();
+
+      // A woken instance has no in-memory clientInfo (no initialize on it).
+      const woken = new TestScryMCP(state, bindings);
+      woken.props = props;
+      await woken.init();
+      expect(woken.server.server.getClientVersion()).toBeUndefined();
+      const label = await (woken as unknown as { agentClient(): Promise<string> }).agentClient();
+      expect(label).toBe("claude-code");
     });
   });
 });
