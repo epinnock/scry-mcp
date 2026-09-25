@@ -1,5 +1,6 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InitializeRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import {
@@ -10,7 +11,9 @@ import {
 import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
-import { CALLER_ASSERTION_HEADER, CallerAssertionCache } from "./utils/caller-assertion.js";
+import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE } from "./utils/caller-assertion.js";
+import { DashboardAgentClient, SlidingWindowLimiter, agentClientLabel } from "./issues/client";
+import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
@@ -33,6 +36,8 @@ import {
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+/** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
+const CLIENT_INFO_KEY = "mcpClientInfo";
 
 // --- Constants ---
 const REQUEST_TIMEOUT_MS = 30_000; // 30s timeout for upstream API calls
@@ -117,6 +122,48 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   // One Durable Object instance serves one user, so a per-instance cache of
   // the short-lived assertion is per-user by construction.
   private callerAssertion = new CallerAssertionCache();
+
+  // --- Issue tools (feature issue-resolution): MCP → dashboard /api/agent/issues/* ---
+  private dashboardAssertion = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
+  private issueWriteLimiter = new SlidingWindowLimiter(ISSUE_WRITE_RATE_LIMIT_RPM);
+
+  /**
+   * Client for the dashboard's agent issue API, or null when unconfigured.
+   * `agent_client` is the name the MCP client reported at initialize (e.g.
+   * "claude-code"); it rides inside the signed assertion so the dashboard can
+   * record it, and it is only ever an audit label, never a permission.
+   */
+  /**
+   * The MCP client's name for the audit trail. The SDK keeps clientInfo only in
+   * memory, and this Durable Object hibernates between requests, so the name
+   * seen at initialize is also persisted (the DO is per MCP session).
+   */
+  private async agentClient(): Promise<string> {
+    const live = this.server.server.getClientVersion();
+    if (live) return agentClientLabel(live);
+    try {
+      const stored = await this.ctx.storage.get<{ name?: string; title?: string }>(CLIENT_INFO_KEY);
+      return agentClientLabel(stored);
+    } catch {
+      return agentClientLabel(undefined);
+    }
+  }
+
+  private dashboardAgentClient(): DashboardAgentClient | null {
+    const baseUrl = this.env.SCRY_DASHBOARD_API_URL?.trim();
+    if (!baseUrl || !this.env.SCRY_CALLER_ASSERTION_SECRET) return null;
+    return new DashboardAgentClient({
+      baseUrl,
+      bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
+      assertion: async () => this.dashboardAssertion.get(
+        this.env.SCRY_CALLER_ASSERTION_SECRET,
+        this.props.firebaseUid,
+        new Date(),
+        { agent_client: await this.agentClient() },
+      ),
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
+  }
 
   /**
    * Headers that tell the search API who this request is for.
@@ -1314,6 +1361,31 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
       }
     );
+
+    // Persist the client's self-reported name (see agentClient()) at initialize
+    // itself: the DO can hibernate before notifications/initialized arrives, so
+    // oninitialized may run on an instance that never saw clientInfo. The SDK's
+    // own handler (_oninitialize, not public API) still answers the request.
+    const sdkServer = this.server.server as unknown as { _oninitialize(r: unknown): Promise<unknown> };
+    this.server.server.setRequestHandler(InitializeRequestSchema, async (request) => {
+      const info = request.params.clientInfo as { name?: string; title?: string } | undefined;
+      if (info) {
+        await this.ctx.storage.put(CLIENT_INFO_KEY, { name: info.name, title: info.title })
+          .catch((err: unknown) => this.logDiagnostic("clientInfo", { error: String(err) }));
+      }
+      return sdkServer._oninitialize(request) as never;
+    });
+
+    // --- Issue resolution tools (list/get/claim/mark fixed/request verify/comment) ---
+    // Off unless ISSUE_TOOLS_ENABLED="1" (stage first; production at Gate B).
+    if (this.env.ISSUE_TOOLS_ENABLED === "1") {
+      registerIssueTools(this.server, {
+        client: () => this.dashboardAgentClient(),
+        checkRateLimit: () => this.checkRateLimit(),
+        writeLimiter: this.issueWriteLimiter,
+        log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
+      });
+    }
 
     // --- whoami: authenticated user info ---
     this.server.tool(

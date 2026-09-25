@@ -30,6 +30,21 @@ export const CALLER_ASSERTION_ISSUER = "scry-mcp";
 export const CALLER_ASSERTION_TTL_S = 60;
 
 /**
+ * Audience for the MCP → dashboard hop (`/api/agent/issues/*`, feature
+ * issue-resolution). Distinct from the search audience so an assertion minted
+ * for one service cannot be replayed at the other. The dashboard also reads
+ * `agent_client` from the signed claims (audit label only, never a permission).
+ */
+export const DASHBOARD_AGENT_AUDIENCE = "scry-dashboard-agent";
+
+export interface AssertionOptions {
+  /** Defaults to the search audience. */
+  audience?: string;
+  /** Extra signed claims (e.g. `agent_client`). Registered claims cannot be overridden. */
+  claims?: Record<string, string>;
+}
+
+/**
  * Mint an assertion for `uid`. Throws when the secret or uid is missing —
  * callers must not fall back to sending nothing, because "no assertion"
  * means "anonymous" to the verifier and would silently hide private results.
@@ -38,15 +53,20 @@ export async function mintCallerAssertion(
   secret: string | undefined,
   uid: string | undefined,
   now: Date = new Date(),
+  options: AssertionOptions = {},
 ): Promise<string> {
   if (!secret) throw new Error("SCRY_CALLER_ASSERTION_SECRET is not configured");
   if (!uid) throw new Error("Cannot mint a caller assertion without a user id");
 
   const iat = Math.floor(now.getTime() / 1000);
-  return new SignJWT({})
+  const extra: Record<string, string> = {};
+  for (const [k, v] of Object.entries(options.claims ?? {})) {
+    if (!["sub", "aud", "iss", "iat", "exp", "jti", "nbf"].includes(k)) extra[k] = v;
+  }
+  return new SignJWT(extra)
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setSubject(uid)
-    .setAudience(CALLER_ASSERTION_AUDIENCE)
+    .setAudience(options.audience ?? CALLER_ASSERTION_AUDIENCE)
     .setIssuer(CALLER_ASSERTION_ISSUER)
     .setIssuedAt(iat)
     .setExpirationTime(iat + CALLER_ASSERTION_TTL_S)
@@ -63,12 +83,23 @@ export class CallerAssertionCache {
   private expiresAtMs = 0;
   /** Re-mint this many ms before expiry so an in-flight request never carries a stale one. */
   private static readonly REFRESH_MARGIN_MS = 15_000;
+  /** What the cached token was minted for; a different uid or claim set re-mints. */
+  private cacheKey = "";
 
-  async get(secret: string | undefined, uid: string | undefined, now: Date = new Date()): Promise<string> {
-    if (this.token && now.getTime() < this.expiresAtMs - CallerAssertionCache.REFRESH_MARGIN_MS) {
+  constructor(private readonly options: Omit<AssertionOptions, "claims"> = {}) {}
+
+  async get(
+    secret: string | undefined,
+    uid: string | undefined,
+    now: Date = new Date(),
+    claims?: Record<string, string>,
+  ): Promise<string> {
+    const key = JSON.stringify([uid ?? "", claims ?? {}]);
+    if (this.token && key === this.cacheKey && now.getTime() < this.expiresAtMs - CallerAssertionCache.REFRESH_MARGIN_MS) {
       return this.token;
     }
-    this.token = await mintCallerAssertion(secret, uid, now);
+    this.token = await mintCallerAssertion(secret, uid, now, { audience: this.options.audience, claims });
+    this.cacheKey = key;
     this.expiresAtMs = now.getTime() + CALLER_ASSERTION_TTL_S * 1000;
     return this.token;
   }

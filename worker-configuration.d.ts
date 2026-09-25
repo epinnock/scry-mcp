@@ -20,6 +20,12 @@ declare namespace Cloudflare {
      * fail closed with SERVER_MISCONFIGURED rather than searching anonymously.
      */
     SCRY_CALLER_ASSERTION_SECRET?: string;
+    /** Dashboard base URL for the issue tools' /api/agent/issues/* (feature issue-resolution). */
+    SCRY_DASHBOARD_API_URL?: string;
+    /** Optional. Vercel automation bypass token for the protected stage dashboard; unset in production. */
+    SCRY_DASHBOARD_BYPASS_TOKEN?: string;
+    /** "1" registers the six issue tools. Off by default (production until Gate B). */
+    ISSUE_TOOLS_ENABLED?: string;
     GEMINI_API_KEY: string;        // Google Gemini API key for image generation (sent as x-goog-api-key)
     /** Cloudflare AI Gateway root (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>). Unset = direct to the provider (kill switch). */
     LLM_GATEWAY_URL?: string;

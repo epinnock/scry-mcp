@@ -39,6 +39,25 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
 
+### Issue resolution tools (stage; `ISSUE_TOOLS_ENABLED="1"`)
+
+Design-drift issues a human has promoted in the dashboard, resolvable in code or in Figma.
+All six call the dashboard's `/api/agent/issues/*` with a signed `X-Scry-Caller`
+(audience `scry-dashboard-agent`, claims `sub` = uid and `agent_client` = the MCP client's
+name); the dashboard checks membership and role and records `actor_kind: "agent"`. Needs
+`SCRY_DASHBOARD_API_URL`, `SCRY_CALLER_ASSERTION_SECRET` and, for the protected stage
+dashboard, the `SCRY_DASHBOARD_BYPASS_TOKEN` secret. Writes are capped at 30/min/user on top
+of the 60 req/min limit.
+
+| Tool | Description |
+|------|-------------|
+| `list_design_issues` | Promoted issues in a project, filterable by link, Figma node, story, fix side, status, side status, severity, assignee, `changed_since` |
+| `get_design_issue` | One issue with both crops, Figma file key + node id, story + source files, expected value, tracks, last re-check, how to fix |
+| `claim_design_issue` | Claim (15-min lease) or release the code or design side |
+| `mark_design_issue_fixed` | Record a fix with a PR URL / commit / Figma version |
+| `request_verify` | Re-check now (free, 20/project/hour, 200/day) or `rediff: true` (10 credits) |
+| `comment_design_issue` | Timeline comment, optionally proposing a fix side |
+
 ## Usage analytics
 
 Each tool handler invocation records one Workers Analytics Engine data point for
