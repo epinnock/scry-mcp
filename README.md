@@ -45,7 +45,8 @@ Design-drift issues a human has promoted in the dashboard, resolvable in code or
 All six call the dashboard's `/api/agent/issues/*` with a signed `X-Scry-Caller`
 (audience `scry-dashboard-agent`, claims `sub` = uid and `agent_client` = the MCP client's
 name); the dashboard checks membership and role and records `actor_kind: "agent"`. Needs
-`SCRY_DASHBOARD_API_URL`, `SCRY_CALLER_ASSERTION_SECRET` and, for the protected stage
+`SCRY_DASHBOARD_API_URL`, `SCRY_AGENT_ASSERTION_SECRET` (a secret shared only with the
+dashboard, separate from the search secret; unset = `SERVER_MISCONFIGURED`) and, for the protected stage
 dashboard, the `SCRY_DASHBOARD_BYPASS_TOKEN` secret. Writes are capped at 30/min/user on top
 of the 60 req/min limit.
 
@@ -251,6 +252,10 @@ Firebase sign-in, search and image generation need Phase 2 configuration:
   per environment with `openssl rand -base64 48`. Set it on scry-nextjs first,
   with its `ALLOW_LEGACY_USER_HEADER=true` transition flag on, then deploy the
   worker, then turn the flag off.
+- Set `SCRY_AGENT_ASSERTION_SECRET` (issue tools only) to the same value as the
+  dashboard's `SCRY_AGENT_ASSERTION_SECRET` for that environment (`wrangler secret
+  put SCRY_AGENT_ASSERTION_SECRET --env staging`; production top-level). It must
+  differ from `SCRY_CALLER_ASSERTION_SECRET` and between stage and production.
 - Add a staging `COOKIE_ENCRYPTION_KEY`, `GEMINI_API_KEY` for image generation,
   and optionally `SENTRY_DSN` for error reporting. In Phase 2, use
   `wrangler secret put <NAME> --env staging`; production secrets remain top-level.

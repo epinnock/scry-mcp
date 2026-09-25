@@ -151,12 +151,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   private dashboardAgentClient(): DashboardAgentClient | null {
     const baseUrl = this.env.SCRY_DASHBOARD_API_URL?.trim();
-    if (!baseUrl || !this.env.SCRY_CALLER_ASSERTION_SECRET) return null;
+    // D-SEC-1: the dashboard-agent hop has its own secret, shared only with the
+    // dashboard. Never fall back to the search secret (SCRY_CALLER_ASSERTION_SECRET).
+    const secret = this.env.SCRY_AGENT_ASSERTION_SECRET;
+    if (!baseUrl || !secret) return null;
     return new DashboardAgentClient({
       baseUrl,
       bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
       assertion: async () => this.dashboardAssertion.get(
-        this.env.SCRY_CALLER_ASSERTION_SECRET,
+        secret,
         this.props.firebaseUid,
         new Date(),
         { agent_client: await this.agentClient() },

@@ -13,6 +13,8 @@ declare module "cloudflare:test" {
 
 const props: AuthProps = { firebaseUid: "agent-user-1", email: "ana@example.test", displayName: "Ana", emailVerified: true };
 const SECRET = "test-caller-assertion-secret";
+/** D-SEC-1: the dashboard-agent hop signs with its own secret, never SECRET. */
+const AGENT_SECRET = "test-agent-assertion-secret";
 const DASH = "https://dashboard.example.test";
 
 class TestScryMCP extends ScryMCP {
@@ -30,6 +32,7 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       SCRY_SEARCH_API_URL: "https://search.example.test",
       SCRY_SEARCH_API_KEY: "test-api-key",
       SCRY_CALLER_ASSERTION_SECRET: SECRET,
+      SCRY_AGENT_ASSERTION_SECRET: AGENT_SECRET,
       MCP_USAGE: undefined,
       ISSUE_TOOLS_ENABLED: "1",
       SCRY_DASHBOARD_API_URL: DASH,
@@ -120,6 +123,17 @@ describe("issue tools registration", () => {
     });
     expect(calls).toHaveLength(0);
   });
+
+  it("D-SEC-1: fails closed when SCRY_AGENT_ASSERTION_SECRET is unset, even with the search secret set", async () => {
+    const calls = mockDashboard(() => Response.json({}));
+    await withClient({ SCRY_AGENT_ASSERTION_SECRET: undefined }, async (client) => {
+      const r = await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
+      expect(r.isError).toBe(true);
+      expect(errorOf(r).error).toBe("SERVER_MISCONFIGURED");
+      expect(errorOf(r).message).toContain("SCRY_AGENT_ASSERTION_SECRET");
+    });
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("identity and audit", () => {
@@ -129,7 +143,7 @@ describe("identity and audit", () => {
       await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
     });
     const h = calls[0].headers;
-    const { payload } = await jwtVerify(h.get("X-Scry-Caller")!, new TextEncoder().encode(SECRET), {
+    const { payload } = await jwtVerify(h.get("X-Scry-Caller")!, new TextEncoder().encode(AGENT_SECRET), {
       algorithms: ["HS256"], audience: DASHBOARD_AGENT_AUDIENCE, issuer: "scry-mcp", maxTokenAge: "60s",
     });
     expect(payload.sub).toBe("agent-user-1");
@@ -144,6 +158,16 @@ describe("identity and audit", () => {
       await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
     });
     await expect(jwtVerify(calls[0].headers.get("X-Scry-Caller")!, new TextEncoder().encode(SECRET), { audience: "scry-search" })).rejects.toThrow();
+  });
+
+  it("D-SEC-1: the dashboard assertion is signed with SCRY_AGENT_ASSERTION_SECRET, not the search secret", async () => {
+    const calls = mockDashboard(() => Response.json({ issues: [] }));
+    await withClient({}, async (client) => {
+      await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
+    });
+    const token = calls[0].headers.get("X-Scry-Caller")!;
+    await expect(jwtVerify(token, new TextEncoder().encode(SECRET), { audience: DASHBOARD_AGENT_AUDIENCE })).rejects.toThrow(/signature/);
+    await expect(jwtVerify(token, new TextEncoder().encode(AGENT_SECRET), { audience: DASHBOARD_AGENT_AUDIENCE })).resolves.toBeTruthy();
   });
 
   it("never sends actor fields in write bodies (the dashboard sets them)", async () => {
@@ -397,7 +421,7 @@ describe("agent_client survives hibernation", () => {
   it("persists clientInfo at initialize and reads it back on a fresh instance", async () => {
     const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.newUniqueId());
     await runInDurableObject(stub, async (_instance, state) => {
-      const bindings = { ...env, SCRY_CALLER_ASSERTION_SECRET: SECRET, MCP_USAGE: undefined, ISSUE_TOOLS_ENABLED: "1", SCRY_DASHBOARD_API_URL: DASH } as Env;
+      const bindings = { ...env, SCRY_CALLER_ASSERTION_SECRET: SECRET, SCRY_AGENT_ASSERTION_SECRET: AGENT_SECRET, MCP_USAGE: undefined, ISSUE_TOOLS_ENABLED: "1", SCRY_DASHBOARD_API_URL: DASH } as Env;
       const first = new TestScryMCP(state, bindings);
       first.props = props;
       await first.init();

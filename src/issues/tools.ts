@@ -62,7 +62,7 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
     }
     const client = ctx.client();
     if (!client) {
-      return errorResult("SERVER_MISCONFIGURED", "The Scry MCP server is not configured for issue tools (SCRY_DASHBOARD_API_URL or SCRY_CALLER_ASSERTION_SECRET missing). Ask the operator.", false);
+      return errorResult("SERVER_MISCONFIGURED", "The Scry MCP server is not configured for issue tools (SCRY_DASHBOARD_API_URL or SCRY_AGENT_ASSERTION_SECRET missing). Ask the operator.", false);
     }
     const start = Date.now();
     let res: ApiResult;
@@ -71,8 +71,8 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
     } catch (err) {
       const timeout = err instanceof Error && err.name === "AbortError";
       ctx.log(`${tool}:error`, { error: timeout ? "timeout" : String(err), latencyMs: Date.now() - start });
-      if (String(err).includes("SCRY_CALLER_ASSERTION_SECRET")) {
-        return errorResult("SERVER_MISCONFIGURED", "The Scry MCP server cannot sign its caller assertion (SCRY_CALLER_ASSERTION_SECRET is not set). Ask the operator.", false);
+      if (String(err).includes("SCRY_AGENT_ASSERTION_SECRET")) {
+        return errorResult("SERVER_MISCONFIGURED", "The Scry MCP server cannot sign its caller assertion (SCRY_AGENT_ASSERTION_SECRET is not set). Ask the operator.", false);
       }
       return errorResult(timeout ? "TIMEOUT" : "DASHBOARD_UNREACHABLE", timeout ? "The Scry dashboard did not answer in time." : "Could not reach the Scry dashboard.", true);
     }

@@ -55,6 +55,7 @@ describe("mintCallerAssertion", () => {
   it("throws when the secret is missing", async () => {
     await expect(mintCallerAssertion(undefined, "uid")).rejects.toThrow(/SCRY_CALLER_ASSERTION_SECRET/);
     await expect(mintCallerAssertion("", "uid")).rejects.toThrow(/SCRY_CALLER_ASSERTION_SECRET/);
+    await expect(mintCallerAssertion(undefined, "uid", new Date(), { audience: DASHBOARD_AGENT_AUDIENCE })).rejects.toThrow(/SCRY_AGENT_ASSERTION_SECRET/);
   });
 
   it("throws when the uid is missing", async () => {

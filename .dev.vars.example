@@ -13,3 +13,8 @@ GEMINI_API_KEY=your-gemini-api-key
 # is for. Must equal scry-nextjs's SCRY_CALLER_ASSERTION_SECRET for the same
 # environment. Generate with: openssl rand -base64 48
 SCRY_CALLER_ASSERTION_SECRET=
+
+# Signs the X-Scry-Caller assertion for the issue tools (aud scry-dashboard-agent).
+# Shared ONLY with the dashboard (its SCRY_AGENT_ASSERTION_SECRET); never reuse the
+# search secret above. Unset = the issue tools return SERVER_MISCONFIGURED.
+SCRY_AGENT_ASSERTION_SECRET=
