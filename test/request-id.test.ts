@@ -11,7 +11,6 @@ import { REQUEST_ID_HEADER, acceptOrMint, isValidRequestId, mintRequestId } from
 import {
   buildRequestLine,
   currentRequestId,
-  inboundRequestId,
   requestIdHeaders,
   runWithRequestId,
   toolErrorCode,
@@ -122,16 +121,16 @@ describe("wrapToolHandler", () => {
     expect(requestIdHeaders()).toEqual({});
   });
 
-  it("accepts a well-formed inbound header and replaces a malformed one", async () => {
+  it("always mints: an inbound x-scry-request-id is ignored (trust rule)", async () => {
     const ids: Array<string | undefined> = [];
     const h = wrapToolHandler("whoami", async () => { ids.push(currentRequestId()); return { content: [] }; }, { emit: () => {} });
     await h({ requestInfo: { headers: { [REQUEST_ID_HEADER]: UUID } } });
     await h({ requestInfo: { headers: new Headers({ [REQUEST_ID_HEADER]: "01M3EQG44Y0J8F2K6ZP9RX1T7C" }) } });
     await h({ requestInfo: { headers: { [REQUEST_ID_HEADER]: "<bad>" } } });
-    expect(ids[0]).toBe(UUID);
-    expect(ids[1]).toBe("01M3EQG44Y0J8F2K6ZP9RX1T7C");
-    expect(ids[2]).toMatch(ULID);
-    expect(inboundRequestId(undefined)).toBeUndefined();
+    for (const id of ids) expect(id).toMatch(ULID);
+    expect(ids).not.toContain(UUID);
+    expect(ids).not.toContain("01M3EQG44Y0J8F2K6ZP9RX1T7C");
+    expect(new Set(ids).size).toBe(3);
   });
 
   it("reports a thrown handler with request_id + tool tags and returns a structured error", async () => {

@@ -17,7 +17,7 @@ import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
-import { enqueueSpans, envName, resolveSampleRate, shouldTrace, utcDay } from "./telemetry/producer";
+import { enqueueSpans, envName, resolveSampleRate, serverDraw, shouldTrace, utcDay } from "./telemetry/producer";
 import {
   CreditsClient,
   CreditsUnavailableError,
@@ -218,14 +218,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   ): Promise<void> {
     try {
       const resolved = await rate;
-      if (!shouldTrace(this.env, t.runId, resolved)) return;
+      const draw = serverDraw(); // one draw per call, never from the id
+      if (!shouldTrace(this.env, t.runId, resolved, draw)) return;
       const spans = buildImageSpans({
         ...t,
         userId: this.props?.firebaseUid ?? null,
         envName: envName(this.env),
         commit: this.env.SCRY_COMMIT ?? null,
       });
-      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans, rate: resolved });
+      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans, rate: resolved, draw });
     } catch (err) {
       this.logDiagnostic("traceImageCall", { requestId: t.runId, error: String(err) });
     }

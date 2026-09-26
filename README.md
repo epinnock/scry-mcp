@@ -82,10 +82,12 @@ SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() -
 Every tool call has one `x-scry-request-id` (feature observability-request-id;
 contract in `scry-management/features/observability-request-id/briefs/_request-id-contract.md`).
 
-- **Minted per tool call** as a ULID (26 chars, Crockford base32, time-sortable),
-  or accepted from an inbound `x-scry-request-id` when the MCP transport exposes
-  request headers and the value is a ULID or lowercase UUID v4. Anything else is
-  replaced and never logged. Code: `src/lib/request-id.ts`, `src/lib/tool-request.ts`.
+- **Minted per tool call** as a ULID (26 chars, Crockford base32, time-sortable).
+  An inbound `x-scry-request-id` is always ignored: the MCP server faces end
+  users and API clients, so under the contract's trust rule it never accepts a
+  caller-chosen id. Code: `src/lib/request-id.ts`, `src/lib/tool-request.ts`.
+- **Langfuse sampling** uses a server-side random draw per call
+  (`serverDraw` in `src/telemetry/producer.ts`), never the id.
 - **Forwarded** on every Scry hop: search (`/api/search`, `/api/image/presign`,
   `/api/image/upload`), the dashboard issue API, and the diff-service credits
   ledger. It is not sent to Google.

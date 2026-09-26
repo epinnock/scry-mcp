@@ -2,8 +2,9 @@
  * One request id per MCP tool call (feature observability-request-id).
  *
  * Every tool handler is wrapped by `instrumentToolRegistration`, which:
- * - accepts a well-formed inbound `x-scry-request-id` when the transport carries
- *   one, and otherwise mints a ULID;
+ * - always mints a fresh ULID per call and ignores any inbound
+ *   `x-scry-request-id` (contract "Trust rule": MCP faces end users and API
+ *   clients, so it is an edge that never accepts a caller-chosen id);
  * - runs the handler inside an AsyncLocalStorage context, so any outbound call
  *   to a Scry service (search, dashboard, credits ledger) can forward the id with
  *   `requestIdHeaders()` without threading it through every signature;
@@ -19,7 +20,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as Sentry from "@sentry/cloudflare";
-import { REQUEST_ID_HEADER, acceptOrMint } from "./request-id";
+import { REQUEST_ID_HEADER, mintRequestId } from "./request-id";
 
 interface ToolCallContext {
   requestId: string;
@@ -123,15 +124,6 @@ export function withRequestIdInErrors<T>(result: T, requestId: string): T {
   return changed ? ({ ...r, content } as T) : result;
 }
 
-/** The inbound header, when the MCP transport exposes HTTP request headers (`extra.requestInfo`). */
-export function inboundRequestId(extra: unknown): string | undefined {
-  const headers = (extra as { requestInfo?: { headers?: unknown } } | undefined)?.requestInfo?.headers;
-  if (!headers) return undefined;
-  if (typeof (headers as Headers).get === "function") return (headers as Headers).get(REQUEST_ID_HEADER) ?? undefined;
-  const v = (headers as Record<string, unknown>)[REQUEST_ID_HEADER];
-  return typeof v === "string" ? v : Array.isArray(v) && typeof v[0] === "string" ? v[0] : undefined;
-}
-
 export interface ToolWrapOptions {
   /** Where the request line goes. Default: console.log(JSON.stringify(line)). */
   emit?: (line: RequestLine) => void;
@@ -168,9 +160,8 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
   const emit = opts.emit ?? defaultEmit;
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
-    const extra = args[args.length - 1];
     const input = args.length > 1 ? (args[0] as Record<string, unknown> | undefined) : undefined;
-    const requestId = acceptOrMint(inboundRequestId(extra));
+    const requestId = mintRequestId();
     const start = Date.now();
     return context.run({ requestId }, async () => {
       let result: unknown;

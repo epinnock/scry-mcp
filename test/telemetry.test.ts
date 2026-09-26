@@ -161,7 +161,7 @@ describe("producer", () => {
     expect(telemetryEnabled({ LANGFUSE_ENABLED: "true", TELEMETRY_QUEUE: queue() as never })).toBe(true);
   });
 
-  it("parses and clamps the sample rate; sampling is deterministic per trace id", () => {
+  it("parses and clamps the sample rate; sampling uses a server draw, never the id", () => {
     expect(sampleRate({})).toBe(1);
     expect(sampleRate({ LANGFUSE_SAMPLE_RATE: "abc" })).toBe(1);
     expect(sampleRate({ LANGFUSE_SAMPLE_RATE: "0.25" })).toBe(0.25);
@@ -169,11 +169,10 @@ describe("producer", () => {
     expect(sampleRate({ LANGFUSE_SAMPLE_RATE: "-1" })).toBe(0);
     expect(isSampled(RUN, 1)).toBe(true);
     expect(isSampled(RUN, 0)).toBe(false);
-    // 0x3f2a9c1e / 2^32 ≈ 0.247
-    expect(isSampled(RUN, 0.25)).toBe(true);
-    expect(isSampled(RUN, 0.24)).toBe(false);
-    const ids = Array.from({ length: 2000 }, () => crypto.randomUUID());
-    const share = ids.filter((id) => isSampled(id, 0.25)).length / ids.length;
+    expect(isSampled(RUN, 0.25, 0.247)).toBe(true);
+    expect(isSampled(RUN, 0.24, 0.247)).toBe(false);
+    // The same id gets independent draws: it cannot pick its own sampling outcome.
+    const share = Array.from({ length: 2000 }, () => isSampled(RUN, 0.25)).filter(Boolean).length / 2000;
     expect(share).toBeGreaterThan(0.2);
     expect(share).toBeLessThan(0.3);
     expect(shouldTrace({ LANGFUSE_ENABLED: "1", LANGFUSE_SAMPLE_RATE: "0", TELEMETRY_QUEUE: queue() as never }, RUN)).toBe(false);
@@ -241,12 +240,12 @@ describe("dynamic sample rate (diff-service /api/telemetry/sampling)", () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toBe(`${BASE}/api/telemetry/sampling`);
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer svc-token");
-    // RUN's trace id maps to ~0.247: sampled out at 0.2, in at the env 0.9.
-    expect(shouldTrace(on, RUN, 0.2)).toBe(false);
-    expect(shouldTrace(on, RUN)).toBe(true);
+    // A draw of 0.247: sampled out at 0.2, in at the env 0.9.
+    expect(shouldTrace(on, RUN, 0.2, 0.247)).toBe(false);
+    expect(shouldTrace(on, RUN, undefined, 0.247)).toBe(true);
     const queue = { send: vi.fn(async () => {}) };
     const spans = buildImageSpans(trace());
-    expect(await enqueueSpans({ ...on, TELEMETRY_QUEUE: queue as never }, { runId: RUN, day: "d", spans, rate: 0.2 })).toBe(0);
+    expect(await enqueueSpans({ ...on, TELEMETRY_QUEUE: queue as never }, { runId: RUN, day: "d", spans, rate: 0.2, draw: 0.247 })).toBe(0);
     expect(queue.send).not.toHaveBeenCalled();
   });
 

@@ -522,17 +522,15 @@ describe("generate_image wallet resolution (D1 revised: org wallets, rule 3 with
 });
 
 describe("generate_image ledger key is server-minted, never the request id", () => {
-  it("an inbound request id reused across two calls produces two distinct ledger refs and two charges", async () => {
+  it("an inbound request id reused across two calls is ignored: two distinct ledger refs, two charges", async () => {
     const INBOUND = "01M3EQG44Y0J8F2K6ZP9RX1T7C";
     const { ledger, gemini } = mockUpstreams();
-    const trace: string[] = [];
     await withClient({ CREDITS_MODE: "enforce" }, async (client) => {
       for (let i = 0; i < 2; i++) {
         const r = await client.callTool(fast);
         expect(r.isError).not.toBe(true);
       }
     }, { inboundRequestId: INBOUND });
-    for (const c of ledger) trace.push(c.headers.get("x-scry-request-id") ?? "");
     expect(gemini).toHaveLength(2);
     const reserves = ledger.filter((c) => c.path === "/api/credits/reserve");
     const settles = ledger.filter((c) => c.path === "/api/credits/settle");
@@ -545,7 +543,10 @@ describe("generate_image ledger key is server-minted, never the request id", () 
       expect(ref).not.toContain(INBOUND);
     }
     expect(settles.map((c) => c.body.ref_id)).toEqual(refs);
-    // The inbound id is still used for tracing: it is forwarded on the ledger hop.
-    expect(trace).toEqual([INBOUND, INBOUND, INBOUND, INBOUND]);
+    // The inbound header is ignored (trust rule): each call forwards its own minted id.
+    const forwarded = ledger.map((c) => c.headers.get("x-scry-request-id"));
+    expect(forwarded).not.toContain(INBOUND);
+    for (const id of forwarded) expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(new Set(forwarded).size).toBe(2);
   });
 });

@@ -24,7 +24,6 @@
 // retry makes the same choice. Gateway analytics still count 100% of calls.
 
 import { encodeTraceRequest, resourceAttrs, type OtlpTraceRequest, type SpanRecord } from "./otlp";
-import { traceIdFor } from "./ids";
 
 export const TELEMETRY_SERVICE = "mcp";
 
@@ -159,19 +158,32 @@ export async function resolveSampleRate(env: TelemetryEnv): Promise<number> {
   }
 }
 
-/** Deterministic: the first 32 bits of the trace id as a fraction, compared with the rate. */
-export function isSampled(runId: string, rate: number): boolean {
+/**
+ * A sampling draw in [0, 1) from server-side randomness. Sampling is never
+ * derived from the call's id (observability-request-id trust rule): a ULID's
+ * leading bits are its timestamp, and an id must never choose its own fate.
+ */
+export function serverDraw(): number {
+  return crypto.getRandomValues(new Uint32Array(1))[0] / 0x1_0000_0000;
+}
+
+/**
+ * Kept when `draw` < rate. `draw` defaults to a fresh server draw; a caller that
+ * checks twice for one call (traceImageCall, then enqueueSpans) passes the same draw.
+ * `runId` is kept in the signature for call-site compatibility and is not used.
+ */
+export function isSampled(_runId: string, rate: number, draw: number = serverDraw()): boolean {
   if (rate >= 1) return true;
   if (rate <= 0) return false;
-  return parseInt(traceIdFor(runId).slice(0, 8), 16) / 0x1_0000_0000 < rate;
+  return draw < rate;
 }
 
 /**
  * True when a full trace should be built and enqueued for this call. `rate`
  * is the resolved rate (resolveSampleRate); omitted → the env var.
  */
-export function shouldTrace(env: TelemetryEnv, runId: string, rate: number = sampleRate(env)): boolean {
-  return telemetryEnabled(env) && isSampled(runId, rate);
+export function shouldTrace(env: TelemetryEnv, runId: string, rate: number = sampleRate(env), draw?: number): boolean {
+  return telemetryEnabled(env) && isSampled(runId, rate, draw);
 }
 
 export function envName(env: TelemetryEnv): string {
@@ -203,9 +215,9 @@ export function spansMessage(env: TelemetryEnv, runId: string, day: string, span
  */
 export async function enqueueSpans(
   env: TelemetryEnv,
-  input: { runId: string; day: string; spans: SpanRecord[]; rate?: number },
+  input: { runId: string; day: string; spans: SpanRecord[]; rate?: number; draw?: number },
 ): Promise<number> {
-  if (!input.spans.length || !shouldTrace(env, input.runId, input.rate ?? sampleRate(env))) return 0;
+  if (!input.spans.length || !shouldTrace(env, input.runId, input.rate ?? sampleRate(env), input.draw)) return 0;
   try {
     const body = spansMessage(env, input.runId, input.day, input.spans);
     const bytes = new TextEncoder().encode(JSON.stringify(body)).length;
