@@ -1,9 +1,19 @@
 import * as Sentry from "@sentry/cloudflare";
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
-import { ScryMCP } from "./mcp";
+import { ScryMCP as ScryMCPAgent } from "./mcp";
 import { FirebaseAuthHandler } from "./firebase-handler";
+import { sentryOptions } from "./lib/sentry-options";
 
-export { ScryMCP };
+/**
+ * The Durable Object that runs the tools, instrumented so a tool call that
+ * throws reaches Sentry tagged with its `request_id` (src/lib/tool-request.ts).
+ * Before this, Sentry wrapped only the front Worker and never saw a tool error.
+ * The binding looks the class up by this export name.
+ */
+export const ScryMCP = Sentry.instrumentDurableObjectWithSentry(
+  (env: Env) => sentryOptions(env),
+  ScryMCPAgent as never,
+) as unknown as typeof ScryMCPAgent;
 
 /**
  * Wrapped in Sentry so unhandled failures in the MCP surface somewhere other
@@ -13,17 +23,15 @@ export { ScryMCP };
  * search queries, which are customer intellectual property — the component
  * names they are looking for describe their unreleased product. Error context
  * is worth having; the query text is not worth shipping to a third party.
+ * Options (environment = SCRY_ENV, sendDefaultPii off, scrubber) are in
+ * src/lib/sentry-options.ts.
  */
 export default Sentry.withSentry(
-  (env: Env) => ({
-    dsn: env.SENTRY_DSN,
-    release: env.SENTRY_RELEASE,
-    dataCollection: { httpBodies: [] },
-  }),
+  (env: Env) => sentryOptions(env),
   new OAuthProvider({
   apiHandlers: {
-    "/sse": ScryMCP.serveSSE("/sse"),
-    "/mcp": ScryMCP.serve("/mcp"),
+    "/sse": ScryMCPAgent.serveSSE("/sse"),
+    "/mcp": ScryMCPAgent.serve("/mcp"),
   },
   defaultHandler: FirebaseAuthHandler,
   authorizeEndpoint: "/authorize",

@@ -22,6 +22,8 @@ export interface DashboardAgentClientOptions {
   assertion: () => Promise<string>;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** The current tool call's x-scry-request-id, forwarded so the dashboard logs the same id. */
+  requestId?: () => string | undefined;
 }
 
 export interface ListQuery {
@@ -58,6 +60,8 @@ export class DashboardAgentClient {
     };
     const bypass = this.opts.bypassToken?.trim();
     if (bypass) headers["x-vercel-protection-bypass"] = bypass;
+    const requestId = this.opts.requestId?.();
+    if (requestId) headers["x-scry-request-id"] = requestId;
     if (body !== undefined) headers["Content-Type"] = "application/json";
 
     const controller = new AbortController();

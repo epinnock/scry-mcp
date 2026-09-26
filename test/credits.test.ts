@@ -58,7 +58,7 @@ class TestScryMCP extends ScryMCP {
   }
 }
 
-async function withClient(overrides: Partial<Env>, test: (client: Client) => Promise<void>) {
+async function withClient(overrides: Partial<Env>, test: (client: Client) => Promise<void>, opts: { inboundRequestId?: string } = {}) {
   const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.newUniqueId());
   await runInDurableObject(stub, async (_instance, state) => {
     const agent = new TestScryMCP(state, {
@@ -82,6 +82,13 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
     const client = new Client({ name: "credits-test", version: "1.0.0" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await agent.server.connect(serverTransport);
+    if (opts.inboundRequestId) {
+      // Simulate a transport that exposes HTTP headers (extra.requestInfo) carrying
+      // a caller-chosen x-scry-request-id on every message.
+      const deliver = serverTransport.onmessage!;
+      serverTransport.onmessage = (message, extra) =>
+        deliver(message, { ...extra, requestInfo: { headers: { "x-scry-request-id": opts.inboundRequestId! } } } as never);
+    }
     await client.connect(clientTransport);
     try {
       await test(client);
@@ -299,6 +306,7 @@ describe("generate_image credits: refusals", () => {
         credits_url: "https://dashboard.scrymore.com/credits",
         credits_wallet: "org:acme",
         credits_org_name: "Acme",
+        request_id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
       });
     });
     expect(gemini).toHaveLength(0);
@@ -379,6 +387,7 @@ describe("search_by_image surfaces the search API's 402", () => {
         error: "INSUFFICIENT_CREDITS",
         message: "You're out of AI credits (0 left, resets Oct 1). See https://dashboard.scrymore.com/credits",
         retryable: false,
+        request_id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
       });
     });
   });
@@ -509,5 +518,35 @@ describe("generate_image wallet resolution (D1 revised: org wallets, rule 3 with
       await client.callTool(fast);
     });
     expect(up.firestore).toHaveLength(0);
+  });
+});
+
+describe("generate_image ledger key is server-minted, never the request id", () => {
+  it("an inbound request id reused across two calls is ignored: two distinct ledger refs, two charges", async () => {
+    const INBOUND = "01M3EQG44Y0J8F2K6ZP9RX1T7C";
+    const { ledger, gemini } = mockUpstreams();
+    await withClient({ CREDITS_MODE: "enforce" }, async (client) => {
+      for (let i = 0; i < 2; i++) {
+        const r = await client.callTool(fast);
+        expect(r.isError).not.toBe(true);
+      }
+    }, { inboundRequestId: INBOUND });
+    expect(gemini).toHaveLength(2);
+    const reserves = ledger.filter((c) => c.path === "/api/credits/reserve");
+    const settles = ledger.filter((c) => c.path === "/api/credits/settle");
+    expect(reserves).toHaveLength(2);
+    expect(settles).toHaveLength(2);
+    const refs = reserves.map((c) => String(c.body.ref_id));
+    expect(new Set(refs).size).toBe(2);
+    for (const ref of refs) {
+      expect(ref).toMatch(/^mcp-image:[0-9a-f-]{36}$/);
+      expect(ref).not.toContain(INBOUND);
+    }
+    expect(settles.map((c) => c.body.ref_id)).toEqual(refs);
+    // The inbound header is ignored (trust rule): each call forwards its own minted id.
+    const forwarded = ledger.map((c) => c.headers.get("x-scry-request-id"));
+    expect(forwarded).not.toContain(INBOUND);
+    for (const id of forwarded) expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(new Set(forwarded).size).toBe(2);
   });
 });

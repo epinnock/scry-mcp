@@ -77,6 +77,43 @@ API (substitute the staging dataset name for staging):
 SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() - INTERVAL '30' DAY GROUP BY tool
 ```
 
+## Request ids and error tracking
+
+Every tool call has one `x-scry-request-id` (feature observability-request-id;
+contract in `scry-management/features/observability-request-id/briefs/_request-id-contract.md`).
+
+- **Minted per tool call** as a ULID (26 chars, Crockford base32, time-sortable).
+  An inbound `x-scry-request-id` is always ignored: the MCP server faces end
+  users and API clients, so under the contract's trust rule it never accepts a
+  caller-chosen id. Code: `src/lib/request-id.ts`, `src/lib/tool-request.ts`.
+- **Langfuse sampling** uses a server-side random draw per call
+  (`serverDraw` in `src/telemetry/producer.ts`), never the id.
+- **Forwarded** on every Scry hop: search (`/api/search`, `/api/image/presign`,
+  `/api/image/upload`), the dashboard issue API, and the diff-service credits
+  ledger. It is not sent to Google.
+- **Tool errors** carry it: every JSON error body gets `"request_id": "<id>"`
+  (added by the tool wrapper, so no tool has to remember), e.g.
+  `{"error":"SEARCH_API_500","message":"…","retryable":true,"request_id":"01M3…"}`.
+  A handler that throws becomes `INTERNAL_ERROR` / `UPSTREAM_TIMEOUT` with the id.
+- **One request line** per call, written at the end, keys from a fixed allow-list:
+  `{"msg":"request","request_id":"01M…","route":"search_components","outcome":"ok","ms":412,"project_id":"4vR5…"}`
+  (`code` is added when `outcome` is `error`). No uid, email, query text or body.
+  Find a call in Workers Logs by `request_id`. This replaces the old entry-only
+  `{tool, userId}` line; Analytics Engine counts are unchanged.
+- **generate_image** uses the request id as its run id: the AI Gateway `run`
+  metadata, the Langfuse trace (`metadata.request_id`; the trace id is the ULID's
+  128 bits in hex, `traceIdFor` in `src/telemetry/ids.ts`). The request id is
+  for tracing only and is never a billing or idempotency key: the credits hold
+  `ref_id` stays a server-minted UUID per call (`mcp-image:<uuid>`), so a reused
+  inbound id cannot replay a hold or merge two charges.
+- **Sentry** (`src/lib/sentry-options.ts`): `environment = SCRY_ENV`
+  (`staging` | `production`), `sendDefaultPii: false`, no bodies, and a scrubber
+  (`src/lib/sentry-scrub.ts`, copied from build-processing) on events and
+  breadcrumbs. The tool Durable Object is instrumented too, so a tool that throws
+  reaches Sentry tagged `request_id` and `tool`. Without `SENTRY_DSN` the SDK is a
+  no-op. Stage DSN: `wrangler secret put SENTRY_DSN --env staging` (the shared
+  Workers project, tagged `service=scry-mcp`).
+
 ## Project Structure
 
 ```

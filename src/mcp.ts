@@ -17,7 +17,7 @@ import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
-import { enqueueSpans, envName, resolveSampleRate, shouldTrace, utcDay } from "./telemetry/producer";
+import { enqueueSpans, envName, resolveSampleRate, serverDraw, shouldTrace, utcDay } from "./telemetry/producer";
 import {
   CreditsClient,
   CreditsUnavailableError,
@@ -35,6 +35,8 @@ import {
   type ImageTokenUsage,
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
+import { mintRequestId } from "./lib/request-id";
+import { currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
 const CLIENT_INFO_KEY = "mcpClientInfo";
@@ -158,6 +160,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     return new DashboardAgentClient({
       baseUrl,
       bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
+      requestId: currentRequestId,
       assertion: async () => this.dashboardAssertion.get(
         secret,
         this.props.firebaseUid,
@@ -189,9 +192,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   // --- Structured logging ---
+  // Mid-call diagnostics. The per-call line (request id, tool, outcome, ms) is
+  // written by the tool wrapper in src/lib/tool-request.ts at the end of the call;
+  // `request_id` here joins these lines to it.
   private logDiagnostic(tool: string, data: Record<string, unknown>) {
     console.log(JSON.stringify({
       tool,
+      request_id: currentRequestId(),
       userId: this.props?.firebaseUid,
       timestamp: new Date().toISOString(),
       ...data,
@@ -211,22 +218,27 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   ): Promise<void> {
     try {
       const resolved = await rate;
-      if (!shouldTrace(this.env, t.runId, resolved)) return;
+      const draw = serverDraw(); // one draw per call, never from the id
+      if (!shouldTrace(this.env, t.runId, resolved, draw)) return;
       const spans = buildImageSpans({
         ...t,
         userId: this.props?.firebaseUid ?? null,
         envName: envName(this.env),
         commit: this.env.SCRY_COMMIT ?? null,
       });
-      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans, rate: resolved });
+      await enqueueSpans(this.env, { runId: t.runId, day: utcDay(t.startMs), spans, rate: resolved, draw });
     } catch (err) {
       this.logDiagnostic("traceImageCall", { requestId: t.runId, error: String(err) });
     }
   }
 
-  /** Record usage once at tool entry; internal diagnostics must not inflate counts. */
-  private log(tool: string, data: Record<string, unknown>) {
-    this.logDiagnostic(tool, data);
+  /**
+   * Record usage once at tool entry; internal diagnostics must not inflate counts.
+   * The entry log line this used to write (with the raw uid) is replaced by the
+   * end-of-call request line from the tool wrapper; the Analytics Engine count is unchanged.
+   */
+   
+  private log(tool: string, _data: Record<string, unknown>) {
     try {
       const uid = this.props?.firebaseUid ?? "anonymous";
       this.env.MCP_USAGE?.writeDataPoint({
@@ -250,7 +262,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   /** Transport headers for every call to the search API; see search-api-headers.ts. */
   private searchApiHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    return searchApiHeaders(this.env, extra);
+    return searchApiHeaders(this.env, { ...requestIdHeaders(), ...extra });
   }
 
   // --- Fetch with timeout ---
@@ -321,7 +333,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async generateImageViaGemini(
     prompt: string,
     options: { aspectRatio?: string; quality?: string; referenceImages?: string[] } = {},
-    trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: crypto.randomUUID() },
+    trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: currentRequestId() ?? mintRequestId() },
   ): Promise<{ base64: string; mimeType: string; model: string; usage: ImageTokenUsage | null }> {
     const quality = options.quality || "fast";
     const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
@@ -522,6 +534,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async reserveImageCredits(
     quality: ImageQuality,
     requestId: string,
+    ledgerKey: string,
   ): Promise<
     | { ok: true; refId: string | null; amount: number; wouldBlock: boolean; balance: CreditBalance | null; wallet: ResolvedWallet | null }
     | { ok: false; code: string; result: ReturnType<ScryMCP["toolError"]> }
@@ -529,7 +542,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const mode = creditsMode(this.env);
     const none = { ok: true as const, refId: null, amount: 0, wouldBlock: false, balance: null, wallet: null };
     if (mode === "off") return none;
-    const refId = `mcp-image:${requestId}`;
+    // The ledger idempotency key is server-minted per call (ledgerKey), never the
+    // request id: an inbound x-scry-request-id is caller-controlled, and reusing
+    // one must not replay a hold or merge two charges.
+    const refId = `mcp-image:${ledgerKey}`;
     try {
       const wallet = await this.callerWallet();
       const r = await new CreditsClient(this.env).reserve({
@@ -811,6 +827,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   async init() {
+    // Every tool registered below gets a request id, error-body request_id and
+    // an end-of-call request line (src/lib/tool-request.ts).
+    instrumentToolRegistration(this.server);
+
     // --- Register widget resources (MCP Apps UI) ---
     // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
     // CSP only on the read response, not on the registration config.
@@ -1195,8 +1215,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         const start = Date.now();
-        // One id per paid call: the gateway `run` tag, the trace id and the log correlation key.
-        const requestId = crypto.randomUUID();
+        // The tool call's x-scry-request-id is for tracing only: the gateway `run`
+        // tag, the Langfuse trace's request_id and the log correlation key. It is
+        // never a billing or idempotency key (see reserveImageCredits).
+        const requestId = currentRequestId() ?? mintRequestId();
         const trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: requestId };
         // Start resolving the Langfuse sample rate now (cached per isolate; at most
         // ~1.5 s on a cache miss, in parallel with credits + Gemini). Never rejects.
@@ -1217,7 +1239,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
         // Step 0: hold the price on the caller's wallet (no Gemini call when refused).
         const creditQuality: ImageQuality = quality === "quality" ? "quality" : "fast";
-        const credits = await this.reserveImageCredits(creditQuality, requestId);
+        const credits = await this.reserveImageCredits(creditQuality, requestId, crypto.randomUUID());
         if (!credits.ok) {
           await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: undefined, outputRef: null, presigned: false, outcome: credits.code }, sampleRateP);
           return credits.result;
