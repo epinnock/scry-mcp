@@ -36,7 +36,7 @@ import {
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
 import { mintRequestId } from "./lib/request-id";
-import { currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
+import { confirmProjectAccess, currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
 const CLIENT_INFO_KEY = "mcpClientInfo";
@@ -682,6 +682,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         retryable,
       );
     }
+
+    // The search API enforces project access (ACCESS_DENIED otherwise), so a
+    // 2xx for a project_id means the caller may read it: only now may the
+    // request line name the project.
+    confirmProjectAccess(body.project_id);
 
     const data = (await response.json()) as {
       results: Array<{

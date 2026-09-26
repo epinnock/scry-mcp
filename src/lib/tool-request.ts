@@ -11,7 +11,10 @@
  * - adds `"request_id"` to every JSON tool-error body, so no tool has to remember;
  * - writes ONE request line at the end of the call, built from a fixed allow-list
  *   (`msg, request_id, route, outcome, ms, code?, project_id?`), never a spread,
- *   and never the uid, the query text, a key or a body;
+ *   and never the uid, the query text, a key or a body. `project_id` is logged
+ *   only once the service that enforces access (search, dashboard) has answered
+ *   the call for that project (`confirmProjectAccess`); caller input alone never
+ *   puts a project id in the line;
  * - reports a thrown handler error to Sentry with the tags `request_id` and
  *   `tool`, and turns it into a structured tool error instead of a raw message.
  *
@@ -24,6 +27,8 @@ import { REQUEST_ID_HEADER, mintRequestId } from "./request-id";
 
 interface ToolCallContext {
   requestId: string;
+  /** Set only after an access-checking Scry service answered for this project. */
+  projectId?: string;
 }
 
 const context = new AsyncLocalStorage<ToolCallContext>();
@@ -37,6 +42,18 @@ export function currentRequestId(): string | undefined {
 export function requestIdHeaders(): Record<string, string> {
   const id = currentRequestId();
   return id ? { [REQUEST_ID_HEADER]: id } : {};
+}
+
+/**
+ * Record that the service which enforces project access (search API, dashboard
+ * agent API) answered this tool call successfully for `projectId`, so the
+ * request line may name it. Call only after that success; a no-op outside a
+ * tool call or for an unsafe value.
+ */
+export function confirmProjectAccess(projectId: unknown): void {
+  const store = context.getStore();
+  const safe = safeToken(projectId);
+  if (store && safe) store.projectId = safe;
 }
 
 /** Run `fn` as if inside a tool call with this id (tests, and code outside the wrapper). */
@@ -160,10 +177,10 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
   const emit = opts.emit ?? defaultEmit;
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
-    const input = args.length > 1 ? (args[0] as Record<string, unknown> | undefined) : undefined;
     const requestId = mintRequestId();
     const start = Date.now();
-    return context.run({ requestId }, async () => {
+    const store: ToolCallContext = { requestId };
+    return context.run(store, async () => {
       let result: unknown;
       try {
         result = await handler(...args);
@@ -184,7 +201,7 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
           outcome: isError ? "error" : "ok",
           ms: Date.now() - start,
           code: isError ? toolErrorCode(result) : undefined,
-          projectId: input?.project_id,
+          projectId: store.projectId,
         }));
       } catch {
         // Logging must never change the answer.
