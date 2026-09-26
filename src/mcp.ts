@@ -533,6 +533,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async reserveImageCredits(
     quality: ImageQuality,
     requestId: string,
+    ledgerKey: string,
   ): Promise<
     | { ok: true; refId: string | null; amount: number; wouldBlock: boolean; balance: CreditBalance | null; wallet: ResolvedWallet | null }
     | { ok: false; code: string; result: ReturnType<ScryMCP["toolError"]> }
@@ -540,7 +541,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const mode = creditsMode(this.env);
     const none = { ok: true as const, refId: null, amount: 0, wouldBlock: false, balance: null, wallet: null };
     if (mode === "off") return none;
-    const refId = `mcp-image:${requestId}`;
+    // The ledger idempotency key is server-minted per call (ledgerKey), never the
+    // request id: an inbound x-scry-request-id is caller-controlled, and reusing
+    // one must not replay a hold or merge two charges.
+    const refId = `mcp-image:${ledgerKey}`;
     try {
       const wallet = await this.callerWallet();
       const r = await new CreditsClient(this.env).reserve({
@@ -1210,8 +1214,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         const start = Date.now();
-        // One id per paid call: the tool call's x-scry-request-id is the gateway
-        // `run` tag, the Langfuse trace's request_id and the log correlation key.
+        // The tool call's x-scry-request-id is for tracing only: the gateway `run`
+        // tag, the Langfuse trace's request_id and the log correlation key. It is
+        // never a billing or idempotency key (see reserveImageCredits).
         const requestId = currentRequestId() ?? mintRequestId();
         const trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: requestId };
         // Start resolving the Langfuse sample rate now (cached per isolate; at most
@@ -1233,7 +1238,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
         // Step 0: hold the price on the caller's wallet (no Gemini call when refused).
         const creditQuality: ImageQuality = quality === "quality" ? "quality" : "fast";
-        const credits = await this.reserveImageCredits(creditQuality, requestId);
+        const credits = await this.reserveImageCredits(creditQuality, requestId, crypto.randomUUID());
         if (!credits.ok) {
           await this.traceImageCall({ ...traceBase, runId: requestId, startMs: start, endMs: Date.now(), call: undefined, outputRef: null, presigned: false, outcome: credits.code }, sampleRateP);
           return credits.result;

@@ -100,8 +100,10 @@ contract in `scry-management/features/observability-request-id/briefs/_request-i
   `{tool, userId}` line; Analytics Engine counts are unchanged.
 - **generate_image** uses the request id as its run id: the AI Gateway `run`
   metadata, the Langfuse trace (`metadata.request_id`; the trace id is the ULID's
-  128 bits in hex, `traceIdFor` in `src/telemetry/ids.ts`) and the credits hold
-  `ref_id` (`mcp-image:<id>`).
+  128 bits in hex, `traceIdFor` in `src/telemetry/ids.ts`). The request id is
+  for tracing only and is never a billing or idempotency key: the credits hold
+  `ref_id` stays a server-minted UUID per call (`mcp-image:<uuid>`), so a reused
+  inbound id cannot replay a hold or merge two charges.
 - **Sentry** (`src/lib/sentry-options.ts`): `environment = SCRY_ENV`
   (`staging` | `production`), `sendDefaultPii: false`, no bodies, and a scrubber
   (`src/lib/sentry-scrub.ts`, copied from build-processing) on events and
