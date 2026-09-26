@@ -10,6 +10,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ApiResult, DashboardAgentClient, SlidingWindowLimiter } from "./client";
+import { confirmProjectAccess } from "../lib/tool-request";
 import { formatIssue, formatList, formatVerify, formatWrite, mapApiError } from "./format";
 
 export const ISSUE_WRITE_RATE_LIMIT_RPM = 30;
@@ -81,6 +82,9 @@ export function registerIssueTools(server: McpServer, ctx: IssueToolContext): vo
       const m = mapApiError(res.status, res.body);
       return errorResult(m.code, m.message, m.retryable, m.detail);
     }
+    // The dashboard enforces membership; a 2xx means the caller may use this
+    // project, so the request line may name it now (never from input alone).
+    confirmProjectAccess(typeof res.data.project_id === "string" ? res.data.project_id : logData.project_id);
     return render(res.data);
   }
 

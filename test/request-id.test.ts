@@ -8,8 +8,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { REQUEST_ID_HEADER, acceptOrMint, isValidRequestId, mintRequestId } from "../src/lib/request-id";
+import * as Sentry from "@sentry/cloudflare";
 import {
   buildRequestLine,
+  confirmProjectAccess,
   currentRequestId,
   requestIdHeaders,
   runWithRequestId,
@@ -18,7 +20,7 @@ import {
   wrapToolHandler,
   type RequestLine,
 } from "../src/lib/tool-request";
-import { sentryOptions } from "../src/lib/sentry-options";
+import { beforeBreadcrumb, sentryOptions } from "../src/lib/sentry-options";
 import { scrubBreadcrumb, scrubEvent } from "../src/lib/sentry-scrub";
 import { ulidToHex } from "../src/telemetry/ids";
 import { CreditsClient } from "../src/credits";
@@ -111,6 +113,7 @@ describe("wrapToolHandler", () => {
     const h = wrapToolHandler("search_components", async (_args: unknown, _extra: unknown) => {
       seen = currentRequestId();
       headers = requestIdHeaders();
+      confirmProjectAccess("proj-1"); // what search / the dashboard answering 2xx does
       return { content: [{ type: "text", text: "ok" }] };
     }, { emit: l => lines.push(l) });
     await h({ query: CANARY_QUERY, project_id: "proj-1" }, {});
@@ -119,6 +122,27 @@ describe("wrapToolHandler", () => {
     expect(lines).toEqual([{ msg: "request", request_id: seen, route: "search_components", outcome: "ok", ms: expect.any(Number), project_id: "proj-1" }]);
     expect(currentRequestId()).toBeUndefined();
     expect(requestIdHeaders()).toEqual({});
+  });
+
+  it("low #12: project_id from caller input alone is never logged", async () => {
+    const lines: RequestLine[] = [];
+    const ok = wrapToolHandler("search_components", async () => ({ content: [] }), { emit: l => lines.push(l) });
+    await ok({ query: "q", project_id: "someone-elses-project" }, {});
+    const denied = wrapToolHandler("search_components", async () => ({
+      content: [{ type: "text", text: JSON.stringify({ error: "ACCESS_DENIED", message: "no", retryable: false }) }], isError: true,
+    }), { emit: l => lines.push(l) });
+    await denied({ query: "q", project_id: "someone-elses-project" }, {});
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).not.toHaveProperty("project_id");
+    expect(lines[1]).toMatchObject({ outcome: "error", code: "ACCESS_DENIED" });
+  });
+
+  it("confirmProjectAccess is a no-op outside a tool call and drops unsafe ids", async () => {
+    expect(() => confirmProjectAccess("proj-1")).not.toThrow();
+    const lines: RequestLine[] = [];
+    const h = wrapToolHandler("t", async () => { confirmProjectAccess("bad id <x>"); return { content: [] }; }, { emit: l => lines.push(l) });
+    await h({}, {});
+    expect(lines[0]).not.toHaveProperty("project_id");
   });
 
   it("always mints: an inbound x-scry-request-id is ignored (trust rule)", async () => {
@@ -191,6 +215,59 @@ describe("Sentry options", () => {
     expect(o.sendDefaultPii).toBe(false);
     expect(o.dataCollection).toEqual({ userInfo: false, httpBodies: [] });
     expect(o.initialScope.tags.service).toBe("scry-mcp");
+  });
+
+  it("should-fix #7: console breadcrumbs are dropped, other breadcrumbs are scrubbed", () => {
+    expect(beforeBreadcrumb({ category: "console", level: "log", message: `uid ${CANARY_UID}` })).toBeNull();
+    expect(beforeBreadcrumb({ category: "fetch", data: { url: `https://s.test/?k=${CANARY_KEY}` } }).data.url).not.toContain(CANARY_KEY);
+    expect(sentryOptions({}).beforeBreadcrumb).toBe(beforeBreadcrumb);
+  });
+
+  it("should-fix #7: a console line inside a failing tool is not in the captured event's breadcrumbs", async () => {
+    // A real SDK client with the Worker's default integrations (console
+    // included) and our options; the transport records envelopes instead of
+    // sending them.
+    const envelopes: unknown[] = [];
+    const options = {
+      ...sentryOptions({ SENTRY_DSN: "https://publickey@o0.ingest.sentry.io/1", SCRY_ENV: "staging" }),
+      stackParser: () => [],
+      transport: () => ({
+        send: async (envelope: unknown) => { envelopes.push(envelope); return {}; },
+        flush: async () => true,
+      }),
+    };
+    const client = new Sentry.CloudflareClient({ ...options, integrations: Sentry.getDefaultIntegrations(options) } as never);
+    const lines: RequestLine[] = [];
+    const previous = Sentry.getCurrentScope().getClient();
+    Sentry.getCurrentScope().setClient(client);
+    Sentry.getIsolationScope().clearBreadcrumbs();
+    client.init();
+    try {
+      // Control: a breadcrumb added directly survives, so an empty list below is
+      // the filter at work, not a client that records nothing.
+      Sentry.addBreadcrumb({ category: "custom", message: "control-crumb" });
+      const h = wrapToolHandler("generate_image", async () => {
+        console.log(JSON.stringify({ tool: "generate_image", userId: CANARY_UID, errorText: CANARY_QUERY }));
+        throw new Error("gemini failed");
+      }, { emit: l => lines.push(l) });
+      const r = await h({ prompt: "p" }, {}) as { isError: boolean };
+      expect(r.isError).toBe(true);
+      await client.flush(1000);
+    } finally {
+      Sentry.getCurrentScope().setClient(previous);
+      await client.close(1000);
+    }
+    const events = envelopes.flatMap(e => (e as [unknown, Array<[{ type: string }, Record<string, unknown>]>])[1])
+      .filter(([header]) => header.type === "event")
+      .map(([, event]) => event as { breadcrumbs?: Array<{ category?: string; message?: string }>; tags?: Record<string, string> });
+    expect(events).toHaveLength(1);
+    const crumbs = events[0].breadcrumbs ?? [];
+    expect(crumbs.map(c => c.message)).toContain("control-crumb");
+    expect(crumbs.some(c => c.category === "console")).toBe(false);
+    const text = JSON.stringify(events[0]);
+    expect(text).not.toContain(CANARY_UID);
+    expect(text).not.toContain(CANARY_QUERY);
+    expect(events[0].tags).toMatchObject({ tool: "generate_image", request_id: lines[0].request_id });
   });
 
   it("guarantee-3 request line and Sentry event carry no secrets or query text", () => {
@@ -291,6 +368,45 @@ describe("tool calls through ScryMCP", () => {
     // guarantee-3: no uid, email or query text in the request line
     const text = JSON.stringify(lines);
     for (const canary of [CANARY_UID, CANARY_EMAIL, CANARY_QUERY]) expect(text).not.toContain(canary);
+  });
+
+  it("low #12: search_components for a project the caller cannot access logs no project_id", async () => {
+    mockFetch(() => Response.json({ error: "ACCESS_DENIED", message: "no access" }, { status: 403 }));
+    const log = vi.spyOn(console, "log");
+    await withClient({}, async (client) => {
+      const r = await client.callTool({ name: "search_components", arguments: { query: "button", project_id: "not-my-project" } });
+      expect(r.isError).toBe(true);
+    });
+    const lines = requestLines(log);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ route: "search_components", outcome: "error", code: "ACCESS_DENIED" });
+    expect(lines[0]).not.toHaveProperty("project_id");
+  });
+
+  it("low #12: issue tools log project_id only after the dashboard answered", async () => {
+    const dashEnv = {
+      ISSUE_TOOLS_ENABLED: "1",
+      SCRY_DASHBOARD_API_URL: "https://dashboard.example.test",
+      SCRY_AGENT_ASSERTION_SECRET: "agent-secret",
+    };
+    mockFetch(() => Response.json({ error: "not_found" }, { status: 404 }));
+    let log = vi.spyOn(console, "log");
+    await withClient(dashEnv, async (client) => {
+      await client.callTool({ name: "list_design_issues", arguments: { project_id: "not-my-project" } });
+    });
+    let lines = requestLines(log);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ route: "list_design_issues", outcome: "error" });
+    expect(lines[0]).not.toHaveProperty("project_id");
+
+    vi.restoreAllMocks();
+    mockFetch(() => Response.json({ issues: [], next_cursor: null }));
+    log = vi.spyOn(console, "log");
+    await withClient(dashEnv, async (client) => {
+      await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
+    });
+    lines = requestLines(log);
+    expect(lines).toEqual([expect.objectContaining({ route: "list_design_issues", outcome: "ok", project_id: "proj-1" })]);
   });
 
   it("each tool call gets its own id", async () => {
