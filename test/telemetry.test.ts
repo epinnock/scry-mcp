@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fnv1a64, spanIdFor, traceIdFor } from "../src/telemetry/ids";
+import { fnv1a64, spanIdFor, traceIdFor, ulidToHex } from "../src/telemetry/ids";
 import { encodeTraceRequest, resourceAttrs, toOtlpSpan } from "../src/telemetry/otlp";
 import {
   enqueueSpans,
@@ -62,6 +62,11 @@ describe("telemetry ids", () => {
   it("uses the UUID as the trace id and derives stable, distinct span ids", () => {
     expect(traceIdFor(RUN)).toBe(RUN.replace(/-/g, ""));
     expect(traceIdFor("not-a-uuid")).toMatch(/^[0-9a-f]{32}$/);
+    // A ULID request id (observability-request-id) maps to its own 128 bits.
+    expect(traceIdFor("01M3EQG44Y0J8F2K6ZP9RX1T7C")).toBe(ulidToHex("01M3EQG44Y0J8F2K6ZP9RX1T7C"));
+    expect(ulidToHex("00000000000000000000000001")).toBe("00000000000000000000000000000001");
+    expect(ulidToHex("7ZZZZZZZZZZZZZZZZZZZZZZZZZ")).toBe("f".repeat(32));
+    expect(ulidToHex("not-a-ulid")).toBeNull();
     expect(rootSpanId(RUN)).toBe(spanIdFor(RUN, "root"));
     expect(llmSpanId(RUN)).not.toBe(rootSpanId(RUN));
     expect(llmSpanId(RUN)).toMatch(/^[0-9a-f]{16}$/);

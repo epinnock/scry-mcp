@@ -17,6 +17,8 @@
 // Whether the LEDGER refuses (402) is its own CREDITS_MODE (diff-service): in
 // shadow it holds and marks would_block instead.
 
+import { requestIdHeaders } from "./lib/tool-request";
+
 export type CreditsMode = "off" | "shadow" | "enforce";
 export type ImageQuality = "fast" | "quality";
 
@@ -94,6 +96,7 @@ export class CreditsClient {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.env.CREDITS_API_TOKEN}`,
+          ...requestIdHeaders(),
         },
         body: JSON.stringify(body),
         signal: controller.signal,

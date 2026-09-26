@@ -187,10 +187,14 @@ describe("MCP usage analytics", () => {
       }
       const result = await client.callTool(toolCalls[1]);
       expect(result.isError).toBe(true);
-      expect(result.content).toEqual([{
-        type: "text",
-        text: JSON.stringify({ error: "RATE_LIMITED", message: "Too many requests. Please wait a moment and try again.", retryable: true }),
-      }]);
+      expect(result.content).toHaveLength(1);
+      const body = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+      expect(body).toEqual({
+        error: "RATE_LIMITED",
+        message: "Too many requests. Please wait a moment and try again.",
+        retryable: true,
+        request_id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+      });
       expect(writeDataPoint.mock.calls).toEqual(Array.from({ length: 61 }, () => [point("search_components")]));
     });
   });

@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { resetSampleRateCache, type SpansMessage } from "../src/telemetry/producer";
+import { traceIdFor } from "../src/telemetry/ids";
 
 declare module "cloudflare:test" {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Workers pool environment augmentation.
@@ -114,7 +115,7 @@ describe("generate_image through the AI Gateway", () => {
     const meta = JSON.parse(c.headers.get("cf-aig-metadata")!);
     expect(Object.keys(meta)).toEqual(["svc", "feat", "user", "run"]);
     expect(meta).toMatchObject({ svc: "mcp", feat: "generate_image", user: props.firebaseUid });
-    expect(meta.run).toMatch(/^[0-9a-f-]{36}$/);
+    expect(meta.run).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/); // the tool call's x-scry-request-id
   });
 
   it("goes direct with no cf-aig header when LLM_GATEWAY_URL is unset (kill switch), key still in a header", async () => {
@@ -159,7 +160,7 @@ describe("generate_image traces", () => {
     expect(msg.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const spans = msg.otlp.resourceSpans[0].scopeSpans[0].spans;
     expect(spans.map((s) => s.name)).toEqual(["mcp.generate_image", "llm.gemini_image"]);
-    expect(spans[0].traceId).toBe(msg.run_id.replace(/-/g, ""));
+    expect(spans[0].traceId).toBe(traceIdFor(msg.run_id));
     const attr = (i: number, k: string) => spans[i].attributes.find((a) => a.key === k)?.value;
     expect(attr(1, "llm.token_count.total")).toEqual({ intValue: "1299" });
     expect(attr(1, "llm.model_name")).toEqual({ stringValue: "gemini-3.1-flash-image-preview" });

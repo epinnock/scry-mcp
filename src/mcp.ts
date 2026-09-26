@@ -35,6 +35,8 @@ import {
   type ImageTokenUsage,
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
+import { mintRequestId } from "./lib/request-id";
+import { currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
 const CLIENT_INFO_KEY = "mcpClientInfo";
@@ -158,6 +160,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     return new DashboardAgentClient({
       baseUrl,
       bypassToken: this.env.SCRY_DASHBOARD_BYPASS_TOKEN,
+      requestId: currentRequestId,
       assertion: async () => this.dashboardAssertion.get(
         secret,
         this.props.firebaseUid,
@@ -189,9 +192,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   // --- Structured logging ---
+  // Mid-call diagnostics. The per-call line (request id, tool, outcome, ms) is
+  // written by the tool wrapper in src/lib/tool-request.ts at the end of the call;
+  // `request_id` here joins these lines to it.
   private logDiagnostic(tool: string, data: Record<string, unknown>) {
     console.log(JSON.stringify({
       tool,
+      request_id: currentRequestId(),
       userId: this.props?.firebaseUid,
       timestamp: new Date().toISOString(),
       ...data,
@@ -224,9 +231,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
   }
 
-  /** Record usage once at tool entry; internal diagnostics must not inflate counts. */
-  private log(tool: string, data: Record<string, unknown>) {
-    this.logDiagnostic(tool, data);
+  /**
+   * Record usage once at tool entry; internal diagnostics must not inflate counts.
+   * The entry log line this used to write (with the raw uid) is replaced by the
+   * end-of-call request line from the tool wrapper; the Analytics Engine count is unchanged.
+   */
+   
+  private log(tool: string, _data: Record<string, unknown>) {
     try {
       const uid = this.props?.firebaseUid ?? "anonymous";
       this.env.MCP_USAGE?.writeDataPoint({
@@ -250,7 +261,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   /** Transport headers for every call to the search API; see search-api-headers.ts. */
   private searchApiHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    return searchApiHeaders(this.env, extra);
+    return searchApiHeaders(this.env, { ...requestIdHeaders(), ...extra });
   }
 
   // --- Fetch with timeout ---
@@ -321,7 +332,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   private async generateImageViaGemini(
     prompt: string,
     options: { aspectRatio?: string; quality?: string; referenceImages?: string[] } = {},
-    trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: crypto.randomUUID() },
+    trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: currentRequestId() ?? mintRequestId() },
   ): Promise<{ base64: string; mimeType: string; model: string; usage: ImageTokenUsage | null }> {
     const quality = options.quality || "fast";
     const model = GEMINI_MODELS[quality] || GEMINI_MODELS.fast;
@@ -811,6 +822,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   }
 
   async init() {
+    // Every tool registered below gets a request id, error-body request_id and
+    // an end-of-call request line (src/lib/tool-request.ts).
+    instrumentToolRegistration(this.server);
+
     // --- Register widget resources (MCP Apps UI) ---
     // Matching the mcp-app-workers-template pattern: server.registerResource() directly,
     // CSP only on the read response, not on the registration config.
@@ -1195,8 +1210,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         }
 
         const start = Date.now();
-        // One id per paid call: the gateway `run` tag, the trace id and the log correlation key.
-        const requestId = crypto.randomUUID();
+        // One id per paid call: the tool call's x-scry-request-id is the gateway
+        // `run` tag, the Langfuse trace's request_id and the log correlation key.
+        const requestId = currentRequestId() ?? mintRequestId();
         const trace: { runId: string; call?: NonNullable<ImageCallTrace["call"]> } = { runId: requestId };
         // Start resolving the Langfuse sample rate now (cached per isolate; at most
         // ~1.5 s on a cache miss, in parallel with credits + Gemini). Never rejects.

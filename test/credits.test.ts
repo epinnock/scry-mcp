@@ -218,7 +218,7 @@ describe.each(["shadow", "enforce"] as const)("generate_image credits: CREDITS_M
     expect(reserve.body).toMatchObject({
       wallet_id: "org:acme", task: "mcp.image.fast", quantity: 1, ref_type: "mcp", actor_uid: "credits-test-user",
     });
-    expect(reserve.body.ref_id).toMatch(/^mcp-image:[0-9a-f-]{36}$/);
+    expect(reserve.body.ref_id).toMatch(/^mcp-image:[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(settle.body.ref_id).toBe(reserve.body.ref_id);
     expect(settle.body.reason).toBe("gemini-3.1-flash-image-preview · 9 in · 1290 out (1290 image) · 1299 total tokens");
   });
@@ -299,6 +299,7 @@ describe("generate_image credits: refusals", () => {
         credits_url: "https://dashboard.scrymore.com/credits",
         credits_wallet: "org:acme",
         credits_org_name: "Acme",
+        request_id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
       });
     });
     expect(gemini).toHaveLength(0);
@@ -379,6 +380,7 @@ describe("search_by_image surfaces the search API's 402", () => {
         error: "INSUFFICIENT_CREDITS",
         message: "You're out of AI credits (0 left, resets Oct 1). See https://dashboard.scrymore.com/credits",
         retryable: false,
+        request_id: expect.stringMatching(/^[0-9A-HJKMNP-TV-Z]{26}$/),
       });
     });
   });
