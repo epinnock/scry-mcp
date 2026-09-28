@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractResultMetadata } from "../src/utils/result-metadata";
+import { extractResultMetadata, isNativeSourceType, nativePlatformLabel } from "../src/utils/result-metadata";
 
 /**
  * Records written by scry-build-processing-service (pipeline/vector-inserter.ts)
@@ -99,5 +99,73 @@ describe("extractResultMetadata", () => {
     expect(upload.description).toBe("A login screen.");
     expect(upload.screenshotUrl).toBe("https://r2.example.com/u/screen.png");
     expect(upload.sourcePath).toBeUndefined();
+  });
+});
+
+/**
+ * feature capture-sources, guarantee-5: a row from a native source has no
+ * live Storybook. Records here are what
+ * scry-build-processing-service/src/pipeline/vector-inserter.ts writes into
+ * `json_content` for a React Native on-device Storybook capture (contract
+ * §5/§6): source_type "storybook-rn", platform "ios"/"android".
+ */
+const nativeJsonContent = {
+  source_type: "storybook-rn",
+  platform: "ios",
+  filepath: "src/components/Button.stories.tsx",
+  componentFilePath: "src/components/Button.tsx",
+  testName: "Primary",
+  storyTitle: "UI/Button",
+  screenshotPath: "images/ui-button-primary.png",
+  location: { startLine: 12, endLine: 18 },
+};
+
+describe("extractResultMetadata — capture-sources platform and native gating", () => {
+  it("guarantee-5: never surfaces a storybook URL for a native row, even one carrying a legacy storybook_url", () => {
+    const meta = extractResultMetadata({ ...nativeJsonContent, storybook_url: "https://view.scrymore.com/should-not-appear" });
+    expect(meta.storybookUrl).toBeUndefined();
+  });
+
+  it("labels the platform as 'React Native · iOS' / 'React Native · Android'", () => {
+    expect(extractResultMetadata(nativeJsonContent).platformLabel).toBe("React Native · iOS");
+    expect(extractResultMetadata({ ...nativeJsonContent, platform: "android" }).platformLabel).toBe(
+      "React Native · Android",
+    );
+  });
+
+  it("appends the code location's start line to the source path", () => {
+    const meta = extractResultMetadata(nativeJsonContent);
+    expect(meta.sourcePath).toBe("src/components/Button.tsx");
+    expect(meta.sourceLine).toBe(12);
+  });
+
+  it("has no platformLabel and the legacy storybookUrl fallback for the web default (absent source_type)", () => {
+    const meta = extractResultMetadata({
+      filepath: "src/components/Button.stories.tsx",
+      storybook_url: "https://view.scrymore.com/proj/1/iframe.html?id=button--primary",
+    });
+    expect(meta.platformLabel).toBeUndefined();
+    expect(meta.storybookUrl).toBe("https://view.scrymore.com/proj/1/iframe.html?id=button--primary");
+  });
+
+  it("has no platformLabel for source_type 'storybook' (explicit legacy) either", () => {
+    expect(extractResultMetadata({ source_type: "storybook" }).platformLabel).toBeUndefined();
+  });
+
+  // contract §8: an explicit live link always wins, including for a native
+  // row (an on-device Storybook the customer also exposed over the network).
+  it("uses links.live over the native gate", () => {
+    const meta = extractResultMetadata({
+      ...nativeJsonContent,
+      links: { live: "https://device.example.com/iframe.html?id=ui-button--primary" },
+    });
+    expect(meta.storybookUrl).toBe("https://device.example.com/iframe.html?id=ui-button--primary");
+  });
+
+  it("isNativeSourceType / nativePlatformLabel: unrecognised source_type has no label but is not itself gated by these helpers as native", () => {
+    expect(isNativeSourceType("some-future-kind")).toBe(false);
+    expect(nativePlatformLabel("some-future-kind", "ios")).toBeUndefined();
+    expect(isNativeSourceType(undefined)).toBe(false);
+    expect(isNativeSourceType("storybook")).toBe(false);
   });
 });

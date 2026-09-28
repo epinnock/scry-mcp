@@ -1,4 +1,45 @@
 /**
+ * Kind -> display label for capture sources this MCP knows are native
+ * (feature capture-sources, contract §5/§6). Absent, or `"storybook"`, is the
+ * legacy/default web source and is deliberately not in this map so callers
+ * can gate on `nativePlatformLabel(...) !== undefined` / `isNativeSourceType`.
+ */
+const NATIVE_SOURCE_LABELS: Record<string, string> = {
+  "storybook-rn": "React Native",
+  rn: "React Native",
+  compose: "Compose",
+  swiftui: "SwiftUI",
+  flutter: "Flutter",
+};
+
+const PLATFORM_NAME_LABELS: Record<string, string> = {
+  ios: "iOS",
+  android: "Android",
+  web: "Web",
+};
+
+/** True for a `source_type` this MCP knows has no live Storybook of its own. */
+export function isNativeSourceType(sourceType: string | undefined): boolean {
+  return !!sourceType && sourceType in NATIVE_SOURCE_LABELS;
+}
+
+/**
+ * "React Native · iOS" for a known native source_type/platform pair, or
+ * undefined for the legacy web default and for any source_type this MCP does
+ * not yet recognise (a future kind reads as unlabelled rather than wrong).
+ */
+export function nativePlatformLabel(
+  sourceType: string | undefined,
+  platform: string | undefined,
+): string | undefined {
+  const kind = sourceType ? NATIVE_SOURCE_LABELS[sourceType] : undefined;
+  if (!kind) return undefined;
+  if (!platform || platform === "web") return kind;
+  const name = PLATFORM_NAME_LABELS[platform] ?? platform.charAt(0).toUpperCase() + platform.slice(1);
+  return `${kind} · ${name}`;
+}
+
+/**
  * Pull the actionable fields out of a search result's `json_content`.
  *
  * The build-processing pipeline writes camelCase keys (`filepath`, `storyTitle`,
@@ -24,6 +65,26 @@ export function extractResultMetadata(jc: Record<string, unknown> | undefined) {
       ? (jc.tags as string[])
       : undefined;
 
+  // feature capture-sources (contract §5/§6). Absent source_type is the
+  // legacy web Storybook default — every row indexed before this feature.
+  const sourceType = str("source_type", "sourceType");
+  const platform = str("platform");
+  const isNative = isNativeSourceType(sourceType);
+
+  const links = (jc?.links ?? undefined) as Record<string, unknown> | undefined;
+  const liveUrl = typeof links?.live === "string" && links.live.length > 0 ? links.live : undefined;
+
+  // G5: never surface a Storybook link for a row with no live Storybook.
+  // `links.live` (set at ingest, and backfilled onto legacy sbcov rows from
+  // the build's Storybook view URL) always wins when present. Without it, a
+  // known-native row has no live Storybook to fall back to — a legacy row
+  // (absent source_type, or source_type === "storybook") still uses the old
+  // field, since most rows indexed before this feature have neither.
+  const storybookUrl = liveUrl ?? (isNative ? undefined : str("storybook_url", "storybookUrl"));
+
+  const location = (jc?.location ?? undefined) as Record<string, unknown> | undefined;
+  const sourceLine = typeof location?.startLine === "number" ? (location.startLine as number) : undefined;
+
   return {
     description:
       typeof inspection.description === "string" ? inspection.description : undefined,
@@ -41,9 +102,17 @@ export function extractResultMetadata(jc: Record<string, unknown> | undefined) {
     variant: str("testName", "test_name", "storyName", "story_name"),
     figmaUrl: str("figma_url", "figmaUrl"),
     githubUrl: str("github_url", "githubUrl"),
-    storybookUrl: str("storybook_url", "storybookUrl"),
+    storybookUrl,
     screenshotUrl: str("screenshotR2Url", "screenshot_r2_url", "screenshot_url"),
     tags: tags?.length ? tags : undefined,
+    /** e.g. "storybook-rn"; undefined for the legacy web default. */
+    sourceType,
+    /** e.g. "ios"; undefined when the row carries none. */
+    platform,
+    /** "React Native · iOS"; undefined for web/legacy or an unrecognised source_type. */
+    platformLabel: nativePlatformLabel(sourceType, platform),
+    /** 1-based line from `location.startLine`, to append to a Source: line. */
+    sourceLine,
   };
 }
 
