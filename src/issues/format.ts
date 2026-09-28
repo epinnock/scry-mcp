@@ -4,6 +4,8 @@
  * same data is also returned as `structuredContent` for programmatic clients.
  */
 
+import { isNativeSourceType, nativePlatformLabel } from "../utils/result-metadata";
+
 type Json = Record<string, unknown>;
 
 const s = (v: unknown): string | undefined => (typeof v === "string" && v.length ? v : typeof v === "number" ? String(v) : undefined);
@@ -143,14 +145,22 @@ export function formatIssue(data: Json): string {
     design.layer_subtree != null && `  layer subtree: ${JSON.stringify(design.layer_subtree).slice(0, 4000)}`,
   ].filter(Boolean).join("\n"));
   const cImg = obj(code.image);
+  // feature capture-sources (G5): forward-compatible with a `code` block that
+  // names its platform (source_type/platform, not sent by any dashboard yet).
+  // Absent — every payload today — keeps this exactly as before. Once a
+  // native row's platform is known, the header drops the "(Storybook)" claim
+  // and storybook_url is never printed, even if it were still sent.
+  const codeSourceType = s(code.source_type);
+  const codePlatformLabel = nativePlatformLabel(codeSourceType, s(code.platform));
+  const codeIsNative = isNativeSourceType(codeSourceType);
   out.push([
-    "Code (Storybook):",
+    codePlatformLabel ? `Code (${codePlatformLabel}):` : "Code (Storybook):",
     s(code.story_id) && `  story ${s(code.story_id)}${s(code.story_title) ? ` ("${s(code.story_title)}")` : ""}`,
     s(code.component_file) && `  component_file ${s(code.component_file)}`,
     s(code.story_file) && `  story_file ${s(code.story_file)}`,
     s(code.repository) && `  repository ${s(code.repository)}`,
     (s(code.build_id) || s(code.build_sha)) && `  build ${[s(code.build_id), s(code.build_sha) && `sha ${s(code.build_sha)}`].filter(Boolean).join(" · ")}${s(code.branch) ? ` on ${s(code.branch)}` : ""}`,
-    s(code.storybook_url) && `  ${s(code.storybook_url)}`,
+    !codeIsNative && s(code.storybook_url) && `  ${s(code.storybook_url)}`,
     cImg && `  crop:${box(cImg)}${s(cImg.url) ? ` ${s(cImg.url)}` : ""}`,
     s(code.source_excerpt) && `  source excerpt:\n${s(code.source_excerpt)}`,
   ].filter(Boolean).join("\n"));

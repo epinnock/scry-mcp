@@ -746,9 +746,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
       if (meta.description) lines.push(`   ${meta.description}`);
       else if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
+      // feature capture-sources: which platform this came from, when it is
+      // not the legacy web default (e.g. "Platform: React Native · iOS").
+      if (meta.platformLabel) lines.push(`   Platform: ${meta.platformLabel}`);
       // Source path is what makes a result actionable — an agent cannot import
-      // the component without it, so keep it directly under the name.
-      if (meta.sourcePath) lines.push(`   Source: ${meta.sourcePath}`);
+      // the component without it, so keep it directly under the name. The
+      // line number, when the row has one, replaces the Storybook link a
+      // native story has none of (G5).
+      if (meta.sourcePath) {
+        lines.push(`   Source: ${meta.sourcePath}${meta.sourceLine ? `:${meta.sourceLine}` : ""}`);
+      }
       if (meta.storyPath && meta.storyPath !== meta.sourcePath) {
         lines.push(`   Story file: ${meta.storyPath}`);
       }
@@ -806,6 +813,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         githubUrl: meta.githubUrl,
         storybookUrl: meta.storybookUrl,
         tags: meta.tags,
+        // feature capture-sources: absent for the legacy web default.
+        platform: meta.platform,
+        sourceType: meta.sourceType,
+        platformLabel: meta.platformLabel,
         projectId: r.project_id,
         crossProject: r.crossProject === true,
         // Same values the text output renders, unrolled so a widget does not
