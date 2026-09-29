@@ -15,7 +15,7 @@ const sonarjsWarnRules = Object.fromEntries(
 
 export default tseslint.config(
   {
-    ignores: ["node_modules/**", "dist/**"],
+    ignores: ["node_modules/**", "dist/**", "src/lib/scry-log/**"] // scry-log is vendored (sync.sh), lint it at the source,
   },
   ...tseslint.configs.recommended,
   sonarjs.configs.recommended,

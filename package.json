@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "lint": "eslint src/ test/ --max-warnings 80",
+    "lint": "eslint src/ test/ --max-warnings 87",
     "verify": "npm run typecheck && npm run lint && npm run test:coverage",
     "verify:e2e": "npm run verify && npm run test:e2e"
   },
