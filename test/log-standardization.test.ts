@@ -10,9 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { REQUEST_ID_HEADER } from "../src/lib/request-id";
 import { wrapToolHandler } from "../src/lib/tool-request";
-import { withClientNote } from "../src/lib/client-note";
 import { validateLine, type LogLine, type Sink } from "../src/lib/scry-log";
-import { clientOf, errCodeOf, getLogger, hashUid, msgWords, setLogSinkForTest } from "../src/lib/log";
+import { errCodeOf, getLogger, hashUid, msgWords, setLogSinkForTest } from "../src/lib/log";
 import canary from "./fixtures/scry-log-canary.json";
 
 declare module "cloudflare:test" {
@@ -151,7 +150,7 @@ describe("mcp.ts diagnostics (was :198-206 raw uid, :422 Gemini error text)", ()
 });
 
 describe("guarantee-1 canary corpus never reaches a log line", () => {
-  it("canary in tool arguments, project id, client header and thrown-error text", async () => {
+  it("canary in tool arguments, project id, request-id header and thrown-error text", async () => {
     const sink = collectingSink();
     setLogSinkForTest(sink);
     const out = captureConsole();
@@ -162,26 +161,13 @@ describe("guarantee-1 canary corpus never reaches a log line", () => {
       { logger: getLogger({ SCRY_ENV: "staging" }), identify: () => ({ uid: EMAIL, salt: "s" }), report: () => {} },
     );
     for (const v of values) {
-      await boom({ query: v, project_id: v }, { requestInfo: { headers: new Headers({ "x-scry-client": v, [REQUEST_ID_HEADER]: v }) } });
+      await boom({ query: v, project_id: v }, { requestInfo: { headers: new Headers({ [REQUEST_ID_HEADER]: v }) } });
     }
     await settle();
     const text = JSON.stringify(sink.lines) + out.join("\n");
     expect(sink.lines).toHaveLength(values.length);
     for (const m of canary.markers) expect(text).not.toContain(m);
     for (const l of sink.lines) expect(validateLine(l).ok).toBe(true);
-  });
-
-  it("logs a well-formed x-scry-client, drops others", async () => {
-    const sink = collectingSink();
-    setLogSinkForTest(sink);
-    const h = wrapToolHandler("whoami", async () => ({ content: [] }), { logger: getLogger({ SCRY_ENV: "staging" }) });
-    await h({}, { requestInfo: { headers: new Headers({ "x-scry-client": "scry-link/0.9.0" }) } });
-    await h({}, { requestInfo: { headers: { "x-scry-client": "<b>x</b>" } } });
-    await h({}, { requestInfo: { headers: { "x-scry-client": "scry-cli/1.2.3" } } });
-    await h({});
-    await settle();
-    expect(sink.lines.map(l => l.client)).toEqual(["scry-link/0.9.0", undefined, "scry-cli/1.2.3", undefined]);
-    expect(clientOf(`a/${"9".repeat(200)}`)).toBeUndefined();
   });
 
   it("helpers are total", () => {
@@ -248,78 +234,6 @@ describe("guarantee-4 a broken or slow sink never fails a tool call", () => {
       identify: () => { throw new Error("identify down"); },
     });
     expect(await h({}, {})).toEqual(answer);
-  });
-});
-
-describe("x-scry-client over the real agents transports (not injected by hand)", () => {
-  const rpc = (id: number | undefined, method: string, params: unknown) => JSON.stringify({ jsonrpc: "2.0", ...(id === undefined ? {} : { id }), method, params });
-
-  it("SSE: the header on the POST /sse/message Request reaches the request line", async () => {
-    const sink = collectingSink();
-    setLogSinkForTest(sink);
-    captureConsole();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(SEARCH_OK));
-    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.newUniqueId()) as unknown as DurableObjectStub<ScryMCP>;
-    await runInDurableObject(stub, async (instance: ScryMCP) => {
-      await instance._init(props);
-      const upgraded = await instance.fetch(new Request("https://mcp.test/sse", { headers: { Upgrade: "websocket", "x-partykit-room": "sse-client-test" } }));
-      const ws = upgraded.webSocket!;
-      ws.accept();
-      const replies: Array<{ id?: number }> = [];
-      ws.addEventListener("message", ev => replies.push(JSON.parse(String(ev.data))));
-      const post = (body: string, client?: string) =>
-        instance.onSSEMcpMessage("sse-client-test", new Request("https://mcp.test/sse/message?sessionId=sse-client-test", {
-          method: "POST",
-          headers: { "content-type": "application/json", ...(client ? { "x-scry-client": client } : {}) },
-          body,
-        }));
-      expect(await post(rpc(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } }), "scry-link/0.9.0")).toBeNull();
-      await post(rpc(undefined, "notifications/initialized", {}), "scry-link/0.9.0");
-      await post(rpc(2, "tools/call", { name: "search_components", arguments: { query: "button" } }), "scry-link/0.9.0");
-      for (let i = 0; i < 100 && !replies.some(r => r.id === 2); i++) await new Promise(r => setTimeout(r, 20));
-      expect(replies.some(r => r.id === 2)).toBe(true);
-      ws.close();
-    });
-    await settle();
-    const lines = sink.lines.filter(l => l.msg === "request" && l.route === "search_components");
-    expect(lines).toHaveLength(1);
-    expect(lines[0].client).toBe("scry-link/0.9.0");
-  });
-
-  it("streamable HTTP: the Worker handler passes the header to the session's object before delegating", async () => {
-    const sink = collectingSink();
-    setLogSinkForTest(sink);
-    captureConsole();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(SEARCH_OK));
-    const sessionId = "ab".repeat(32);
-    let delegated = 0;
-    const handler = withClientNote({ fetch: async (_r: Request, _e: Env, _c: ExecutionContext) => { delegated++; return new Response("ok"); } });
-    const res = await handler.fetch(
-      new Request("https://mcp.test/mcp", { method: "POST", headers: { "mcp-session-id": sessionId, "x-scry-client": "scry-cli/1.2.3" } }),
-      env,
-      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
-    );
-    expect(await res.text()).toBe("ok");
-    expect(delegated).toBe(1);
-    // A malformed header or session id is ignored and still delegates.
-    await handler.fetch(new Request("https://mcp.test/mcp", { headers: { "mcp-session-id": "nope", "x-scry-client": "<b>" } }), env, {} as ExecutionContext);
-    expect(delegated).toBe(2);
-
-    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)) as unknown as DurableObjectStub<ScryMCP>;
-    await runInDurableObject(stub, async (instance: ScryMCP, state) => {
-      instance.props = props;
-      await instance.init();
-      const client = new Client({ name: "log-test", version: "1.0.0" });
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      await instance.server.connect(serverTransport);
-      await client.connect(clientTransport);
-      await client.callTool({ name: "search_components", arguments: { query: "button" } });
-      await client.close();
-      void state;
-    });
-    await settle();
-    const line = sink.lines.find(l => l.msg === "request" && l.route === "search_components");
-    expect(line?.client).toBe("scry-cli/1.2.3");
   });
 });
 

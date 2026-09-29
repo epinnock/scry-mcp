@@ -3,7 +3,7 @@ import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { ScryMCP as ScryMCPAgent } from "./mcp";
 import { FirebaseAuthHandler } from "./firebase-handler";
 import { sentryOptions } from "./lib/sentry-options";
-import { withClientNote } from "./lib/client-note";
+import { withEdgeRequestId } from "./lib/edge-request";
 
 /**
  * The Durable Object that runs the tools, instrumented so a tool call that
@@ -27,12 +27,12 @@ export const ScryMCP = Sentry.instrumentDurableObjectWithSentry(
  * Options (environment = SCRY_ENV, sendDefaultPii off, scrubber) are in
  * src/lib/sentry-options.ts.
  */
-export default Sentry.withSentry(
+export default withEdgeRequestId(Sentry.withSentry(
   (env: Env) => sentryOptions(env),
   new OAuthProvider({
   apiHandlers: {
     "/sse": ScryMCPAgent.serveSSE("/sse"),
-    "/mcp": withClientNote(ScryMCPAgent.serve("/mcp")),
+    "/mcp": ScryMCPAgent.serve("/mcp"),
   },
   defaultHandler: FirebaseAuthHandler,
   authorizeEndpoint: "/authorize",
@@ -46,4 +46,4 @@ export default Sentry.withSentry(
   // Requires the 'global_fetch_strictly_public' compatibility flag (set in wrangler.jsonc).
     clientIdMetadataDocumentEnabled: true,
   }) as unknown as ExportedHandler<Env>,
-);
+));

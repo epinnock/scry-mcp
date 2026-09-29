@@ -36,7 +36,7 @@ import {
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
 import { mintRequestId } from "./lib/request-id";
-import { clientOf, errCodeOf, getLogger, hashUid, msgWords, type LogEnv } from "./lib/log";
+import { errCodeOf, getLogger, hashUid, msgWords, type LogEnv } from "./lib/log";
 import { confirmProjectAccess, currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
@@ -109,28 +109,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     name: "scry",
     version: "1.0.0",
   });
-
-  // --- x-scry-client (log-standardization) ---
-  // The agents transports call the MCP server without requestInfo, so the header is captured where the
-  // request enters: `onSSEMcpMessage` (SSE, the Worker passes the whole Request over RPC) and `noteClient`
-  // (streamable HTTP, called by the Worker's /mcp handler in src/index.ts). One Durable Object = one MCP
-  // session, so a per-instance value is per client. Validated by clientOf; used for logging only.
-  private sessionClient: string | undefined;
-
-  async onSSEMcpMessage(sessionId: string, request: Request) {
-    this.noteClientValue(request.headers.get("x-scry-client"));
-    return super.onSSEMcpMessage(sessionId, request);
-  }
-
-  /** RPC from the Worker for streamable-HTTP requests (messages reach the object over a WebSocket without headers). */
-  async noteClient(value: string | null | undefined): Promise<void> {
-    this.noteClientValue(value);
-  }
-
-  private noteClientValue(value: string | null | undefined) {
-    const client = clientOf(value);
-    if (client) this.sessionClient = client;
-  }
 
   // --- Rate limiting (sliding window, per Durable Object instance = per user) ---
   private requestTimestamps: number[] = [];
@@ -900,7 +878,6 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     instrumentToolRegistration(this.server, {
       logger: getLogger(this.env),
       identify: () => ({ uid: this.props?.firebaseUid, salt: (this.env as LogEnv).SCRY_LOG_SALT, env: this.env.SCRY_ENV }),
-      client: () => this.sessionClient,
     });
 
     // --- Register widget resources (MCP Apps UI) ---
