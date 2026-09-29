@@ -24,7 +24,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as Sentry from "@sentry/cloudflare";
-import { REQUEST_ID_HEADER, mintRequestId } from "./request-id";
+import { REQUEST_ID_HEADER, isUlid, mintRequestId } from "./request-id";
 import type { Logger } from "./scry-log";
 import { clientOf, errCodeOf, getLogger, hashUid } from "./log";
 
@@ -156,8 +156,6 @@ export interface ToolWrapOptions {
    * the Worker's /mcp handler). The agents transports pass no requestInfo to handlers, so this is the real path.
    */
   client?: () => string | undefined;
-  /** The edge's id for the HTTP request that carries this call (taken once); absent = mint one. */
-  requestId?: () => string | undefined;
   /** Error reporting for a thrown handler. Default: Sentry with request_id + tool tags. */
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
 }
@@ -197,6 +195,20 @@ function clientFromArgs(args: unknown[]): string | undefined {
   }
 }
 
+/** The edge's request id and client from the handler's `extra._meta` (this message only, never shared state). */
+function metaFromArgs(args: unknown[]): { requestId?: string; client?: string } {
+  try {
+    const m = (args[args.length - 1] as { _meta?: Record<string, unknown> } | undefined)?._meta;
+    const id = m?.["scry/request_id"];
+    return {
+      requestId: isUlid(id) ? id : undefined,
+      client: clientOf(m?.["scry/client"] as string | undefined),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function defaultReport(err: unknown, tags: { request_id: string; tool: string }): void {
   Sentry.withScope(scope => {
     scope.setTag("request_id", tags.request_id);
@@ -221,13 +233,10 @@ type AnyHandler = (...args: any[]) => unknown;
 export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWrapOptions = {}): (...args: unknown[]) => Promise<unknown> {
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
-    let requestId: string | undefined;
-    try {
-      requestId = opts.requestId?.();
-    } catch {
-      requestId = undefined;
-    }
-    requestId ??= mintRequestId();
+    // The edge wrote its id into this message's params._meta (src/lib/edge-request.ts); no edge id (a path that
+    // cannot carry one) = a NEW id that is not joinable with any edge line.
+    const meta = metaFromArgs(args);
+    const requestId = meta.requestId ?? mintRequestId();
     const start = Date.now();
     const store: ToolCallContext = { requestId };
     return context.run(store, async () => {
@@ -257,7 +266,7 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
         else {
           // Fire and forget: the hash is computed inside the log call, never on the request path (G4).
           const who = opts.identify?.() ?? {};
-          const client = clientFromArgs(args) ?? clientOf(opts.client?.());
+          const client = clientFromArgs(args) ?? meta.client ?? clientOf(opts.client?.());
           hashUid(who.uid, who.salt, who.env)
             .then(uid_hash => defaultEmit(line, opts.logger, { uid_hash, client }))
             .catch(() => {});

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { REQUEST_ID_HEADER } from "../src/lib/request-id";
 import { wrapToolHandler } from "../src/lib/tool-request";
-import { withClientNote } from "../src/lib/client-note";
+import { carryInMessage } from "../src/lib/edge-request";
 import { validateLine, type LogLine, type Sink } from "../src/lib/scry-log";
 import { clientOf, errCodeOf, getLogger, hashUid, msgWords, setLogSinkForTest } from "../src/lib/log";
 import canary from "./fixtures/scry-log-canary.json";
@@ -251,10 +251,10 @@ describe("guarantee-4 a broken or slow sink never fails a tool call", () => {
   });
 });
 
-describe("x-scry-client over the real agents transports (not injected by hand)", () => {
+describe("x-scry-client over the real SSE transport (carried in the message by the edge)", () => {
   const rpc = (id: number | undefined, method: string, params: unknown) => JSON.stringify({ jsonrpc: "2.0", ...(id === undefined ? {} : { id }), method, params });
 
-  it("SSE: the header on the POST /sse/message Request reaches the request line", async () => {
+  it("SSE: the client carried in the POST /sse/message body reaches the request line", async () => {
     const sink = collectingSink();
     setLogSinkForTest(sink);
     captureConsole();
@@ -270,8 +270,9 @@ describe("x-scry-client over the real agents transports (not injected by hand)",
       const post = (body: string, client?: string) =>
         instance.onSSEMcpMessage("sse-client-test", new Request("https://mcp.test/sse/message?sessionId=sse-client-test", {
           method: "POST",
-          headers: { "content-type": "application/json", ...(client ? { "x-scry-client": client } : {}) },
-          body,
+          headers: { "content-type": "application/json" },
+          // What the edge does to the body before the Durable Object sees it (src/lib/edge-request.ts).
+          body: carryInMessage(body, "01ARZ3NDEKTSV4RRFFQ69G5FAV", client) ?? body,
         }));
       expect(await post(rpc(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } }), "scry-link/0.9.0")).toBeNull();
       await post(rpc(undefined, "notifications/initialized", {}), "scry-link/0.9.0");
@@ -284,42 +285,6 @@ describe("x-scry-client over the real agents transports (not injected by hand)",
     const lines = sink.lines.filter(l => l.msg === "request" && l.route === "search_components");
     expect(lines).toHaveLength(1);
     expect(lines[0].client).toBe("scry-link/0.9.0");
-  });
-
-  it("streamable HTTP: the Worker handler passes the header to the session's object before delegating", async () => {
-    const sink = collectingSink();
-    setLogSinkForTest(sink);
-    captureConsole();
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(SEARCH_OK));
-    const sessionId = "ab".repeat(32);
-    let delegated = 0;
-    const handler = withClientNote({ fetch: async (_r: Request, _e: Env, _c: ExecutionContext) => { delegated++; return new Response("ok"); } });
-    const res = await handler.fetch(
-      new Request("https://mcp.test/mcp", { method: "POST", headers: { "mcp-session-id": sessionId, "x-scry-client": "scry-cli/1.2.3" } }),
-      env,
-      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
-    );
-    expect(await res.text()).toBe("ok");
-    expect(delegated).toBe(1);
-    // A malformed header or session id is ignored and still delegates.
-    await handler.fetch(new Request("https://mcp.test/mcp", { headers: { "mcp-session-id": "nope", "x-scry-client": "<b>" } }), env, {} as ExecutionContext);
-    expect(delegated).toBe(2);
-
-    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)) as unknown as DurableObjectStub<ScryMCP>;
-    await runInDurableObject(stub, async (instance: ScryMCP, state) => {
-      instance.props = props;
-      await instance.init();
-      const client = new Client({ name: "log-test", version: "1.0.0" });
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      await instance.server.connect(serverTransport);
-      await client.connect(clientTransport);
-      await client.callTool({ name: "search_components", arguments: { query: "button" } });
-      await client.close();
-      void state;
-    });
-    await settle();
-    const line = sink.lines.find(l => l.msg === "request" && l.route === "search_components");
-    expect(line?.client).toBe("scry-cli/1.2.3");
   });
 });
 

@@ -32,6 +32,11 @@ export function mintRequestId(now: number = Date.now()): string {
 }
 
 /** True for a ULID or a lowercase UUID v4 — the only shapes a service accepts inbound. */
+/** A ULID (the edge-minted form). */
+export function isUlid(value: unknown): value is string {
+  return typeof value === "string" && ULID_RE.test(value);
+}
+
 export function isValidRequestId(value: unknown): value is string {
   return typeof value === "string" && (ULID_RE.test(value) || UUID_V4_RE.test(value));
 }

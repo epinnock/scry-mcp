@@ -3,7 +3,6 @@ import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { ScryMCP as ScryMCPAgent } from "./mcp";
 import { FirebaseAuthHandler } from "./firebase-handler";
 import { sentryOptions } from "./lib/sentry-options";
-import { withClientNote } from "./lib/client-note";
 import { withEdgeRequestId } from "./lib/edge-request";
 
 /**
@@ -33,7 +32,7 @@ export default withEdgeRequestId(Sentry.withSentry(
   new OAuthProvider({
   apiHandlers: {
     "/sse": ScryMCPAgent.serveSSE("/sse"),
-    "/mcp": withClientNote(ScryMCPAgent.serve("/mcp")),
+    "/mcp": ScryMCPAgent.serve("/mcp"),
   },
   defaultHandler: FirebaseAuthHandler,
   authorizeEndpoint: "/authorize",

@@ -82,7 +82,17 @@ SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() -
 Every tool call has one `x-scry-request-id` (feature observability-request-id;
 contract in `scry-management/features/observability-request-id/briefs/_request-id-contract.md`).
 
-- **Minted per tool call** as a ULID (26 chars, Crockford base32, time-sortable).
+- **Edge id, one per HTTP request** (`src/lib/edge-request.ts`, F32/G3): the Worker mints a ULID for every request, sets
+  it on the response as `x-scry-request-id` and writes one `msg:"request"` line (route pattern, status, ms). For a
+  `tools/call` on `/mcp` or `/sse/message` the edge also writes that id (and the validated `x-scry-client`) into the
+  message's `params._meta["scry/request_id"]`/`["scry/client"]`; the tool wrapper reads them from the handler's
+  `extra._meta`, so the tool line carries the SAME id as the edge line. The id travels WITH the message: there is no
+  per-session slot and no extra Durable Object call, so overlapping calls on one session cannot swap ids. A value a
+  caller puts in `_meta` is overwritten. **Joinability limit:** if a message cannot carry the id (a body over 4 MB,
+  which the transport rejects anyway, or a client that reaches the Durable Object without going through the Worker),
+  the tool mints a NEW id and its `request_id` does NOT match any edge line; look such calls up by time, route and
+  `uid_hash`. A tool call produces two `msg:"request"` lines with one id (edge: time to response headers; tool: duration).
+- **Minted per tool call** (only when no edge id was carried) as a ULID (26 chars, Crockford base32, time-sortable).
   An inbound `x-scry-request-id` is always ignored: the MCP server faces end
   users and API clients, so under the contract's trust rule it never accepts a
   caller-chosen id. Code: `src/lib/request-id.ts`, `src/lib/tool-request.ts`.
@@ -102,8 +112,7 @@ contract in `scry-management/features/observability-request-id/briefs/_request-i
   `status` is 200 for ok, 500 for a server-side tool error and 400 for any other; errors carry a fixed lowercase
   `err_code` (`search_api_500`). `err_code` split: `INSUFFICIENT_CREDITS` 402, `ACCESS_DENIED` 403, `RATE_LIMITED` 429. `uid_hash` is the first 12 hex of sha256(uid + `SCRY_LOG_SALT`),
   computed off the request path; **`SCRY_LOG_SALT` is a secret** (`wrangler secret put SCRY_LOG_SALT [--env staging]`, one random value per tier, never a var in git) and when it is unset in staging or
-  production `uid_hash` is omitted (no public fallback). `client` is the validated `x-scry-client`, captured at the request boundary:
-  the Durable Object's `onSSEMcpMessage` (SSE) and `withClientNote` in the Worker (`/mcp`, streamable HTTP) because the agents transports pass no requestInfo. No raw uid, email, query text or body. Mid-call diagnostics
+  production `uid_hash` is omitted (no public fallback). `client` is the validated `x-scry-client`, carried per message in `params._meta` by the edge (the agents transports pass no requestInfo and streamable HTTP drops headers on the WebSocket hop). No raw uid, email, query text or body. Mid-call diagnostics
   (`logDiagnostic`) are fixed words plus `status`, `ms`, `err_code`, `uid_hash`; upstream error text is never logged.
   Staging ships the lines to `scry-logs` via `tail_consumers`; find a call with `scry-management/scripts/scry-logs.py --request-id <id>`.
 - **generate_image** uses the request id as its run id: the AI Gateway `run`
