@@ -9,9 +9,10 @@
  *   to a Scry service (search, dashboard, credits ledger) can forward the id with
  *   `requestIdHeaders()` without threading it through every signature;
  * - adds `"request_id"` to every JSON tool-error body, so no tool has to remember;
- * - writes ONE request line at the end of the call, built from a fixed allow-list
- *   (`msg, request_id, route, outcome, ms, code?, project_id?`), never a spread,
- *   and never the uid, the query text, a key or a body. `project_id` is logged
+ * - writes ONE request line at the end of the call through the shared scry-log
+ *   logger (schema v1: `request_id, route, status, ms, project, uid_hash, client,
+ *   err_code`), built from a fixed allow-list, never a spread, and never the raw
+ *   uid, the query text, a key or a body. `project` is logged
  *   only once the service that enforces access (search, dashboard) has answered
  *   the call for that project (`confirmProjectAccess`); caller input alone never
  *   puts a project id in the line;
@@ -24,6 +25,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as Sentry from "@sentry/cloudflare";
 import { REQUEST_ID_HEADER, mintRequestId } from "./request-id";
+import type { Logger } from "./scry-log";
+import { clientOf, errCodeOf, getLogger, hashUid } from "./log";
 
 interface ToolCallContext {
   requestId: string;
@@ -142,14 +145,54 @@ export function withRequestIdInErrors<T>(result: T, requestId: string): T {
 }
 
 export interface ToolWrapOptions {
-  /** Where the request line goes. Default: console.log(JSON.stringify(line)). */
+  /** Where the request line goes. Default: the shared logger (`logger`, else the env-less default one). */
   emit?: (line: RequestLine) => void;
+  /** Shared scry-log logger for the default emit (the Durable Object passes its own, built from env). */
+  logger?: Logger;
+  /** The caller's raw uid and the uid_hash salt; only the salted hash is ever logged. */
+  identify?: () => { uid?: string; salt?: string; env?: string };
+  /**
+   * The caller's `x-scry-client`, captured at the request boundary (the Durable Object's SSE message entry or
+   * the Worker's /mcp handler). The agents transports pass no requestInfo to handlers, so this is the real path.
+   */
+  client?: () => string | undefined;
   /** Error reporting for a thrown handler. Default: Sentry with request_id + tool tags. */
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
 }
 
-function defaultEmit(line: RequestLine): void {
-  console.log(JSON.stringify(line));
+/** HTTP-like status for a tool outcome: 200 ok; 402/403/429 for credits/access/rate limit; server-side failures 500; other tool errors 400. */
+function statusOf(line: RequestLine): number {
+  if (line.outcome === "ok") return 200;
+  const c = (line.code ?? "").toUpperCase();
+  if (c === "INSUFFICIENT_CREDITS") return 402;
+  if (c === "ACCESS_DENIED") return 403;
+  if (c === "RATE_LIMITED") return 429;
+  return c === "INTERNAL_ERROR" || c === "UPSTREAM_TIMEOUT" || c.startsWith("GEMINI") || /_5\d\d$/.test(c) ? 500 : 400;
+}
+
+function defaultEmit(line: RequestLine, logger: Logger | undefined, extra: { uid_hash?: string; client?: string }): void {
+  (logger ?? getLogger(undefined)).request({
+    request_id: line.request_id,
+    route: line.route,
+    status: statusOf(line),
+    ms: line.ms,
+    project: line.project_id,
+    err_code: line.outcome === "error" ? errCodeOf(line.code) : undefined,
+    uid_hash: extra.uid_hash,
+    client: extra.client,
+  });
+}
+
+/** `x-scry-client` from the MCP request info the SDK passes to a handler as its last argument (best effort). */
+function clientFromArgs(args: unknown[]): string | undefined {
+  try {
+    const extra = args[args.length - 1] as { requestInfo?: { headers?: unknown } } | undefined;
+    const h = extra?.requestInfo?.headers as { get?: (k: string) => unknown } & Record<string, unknown> | undefined;
+    if (!h) return undefined;
+    return clientOf(typeof h.get === "function" ? h.get("x-scry-client") : h["x-scry-client"]);
+  } catch {
+    return undefined;
+  }
 }
 
 function defaultReport(err: unknown, tags: { request_id: string; tool: string }): void {
@@ -174,7 +217,6 @@ type AnyHandler = (...args: any[]) => unknown;
 
 /** Wrap one tool handler; see the module comment for what it adds. */
 export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWrapOptions = {}): (...args: unknown[]) => Promise<unknown> {
-  const emit = opts.emit ?? defaultEmit;
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
     const requestId = mintRequestId();
@@ -195,14 +237,23 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
       result = withRequestIdInErrors(result, requestId);
       try {
         const isError = (result as ToolResultLike | undefined)?.isError === true;
-        emit(buildRequestLine({
+        const line = buildRequestLine({
           requestId,
           tool,
           outcome: isError ? "error" : "ok",
           ms: Date.now() - start,
           code: isError ? toolErrorCode(result) : undefined,
           projectId: store.projectId,
-        }));
+        });
+        if (opts.emit) opts.emit(line);
+        else {
+          // Fire and forget: the hash is computed inside the log call, never on the request path (G4).
+          const who = opts.identify?.() ?? {};
+          const client = clientFromArgs(args) ?? clientOf(opts.client?.());
+          hashUid(who.uid, who.salt, who.env)
+            .then(uid_hash => defaultEmit(line, opts.logger, { uid_hash, client }))
+            .catch(() => {});
+        }
       } catch {
         // Logging must never change the answer.
       }

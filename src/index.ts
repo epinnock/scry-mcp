@@ -3,6 +3,7 @@ import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { ScryMCP as ScryMCPAgent } from "./mcp";
 import { FirebaseAuthHandler } from "./firebase-handler";
 import { sentryOptions } from "./lib/sentry-options";
+import { withClientNote } from "./lib/client-note";
 
 /**
  * The Durable Object that runs the tools, instrumented so a tool call that
@@ -31,7 +32,7 @@ export default Sentry.withSentry(
   new OAuthProvider({
   apiHandlers: {
     "/sse": ScryMCPAgent.serveSSE("/sse"),
-    "/mcp": ScryMCPAgent.serve("/mcp"),
+    "/mcp": withClientNote(ScryMCPAgent.serve("/mcp")),
   },
   defaultHandler: FirebaseAuthHandler,
   authorizeEndpoint: "/authorize",

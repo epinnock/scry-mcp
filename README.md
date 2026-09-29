@@ -95,11 +95,17 @@ contract in `scry-management/features/observability-request-id/briefs/_request-i
   (added by the tool wrapper, so no tool has to remember), e.g.
   `{"error":"SEARCH_API_500","message":"…","retryable":true,"request_id":"01M3…"}`.
   A handler that throws becomes `INTERNAL_ERROR` / `UPSTREAM_TIMEOUT` with the id.
-- **One request line** per call, written at the end, keys from a fixed allow-list:
-  `{"msg":"request","request_id":"01M…","route":"search_components","outcome":"ok","ms":412,"project_id":"4vR5…"}`
-  (`code` is added when `outcome` is `error`). No uid, email, query text or body.
-  Find a call in Workers Logs by `request_id`. This replaces the old entry-only
-  `{tool, userId}` line; Analytics Engine counts are unchanged.
+- **One request line** per call, written at the end through the shared scry-log logger
+  (log schema v1, feature log-standardization; vendored at `src/lib/scry-log/`, source of truth
+  `scry-management/lib/scry-log/`, standard `scry-management/skills/feature-workflow/references/logging-tracing-standard.md`):
+  `{"v":1,"ts":"…","level":"info","service":"mcp","env":"staging","version":"<sha>","msg":"request","request_id":"01M…","route":"search_components","status":200,"ms":412,"project":"4vR5…","uid_hash":"<12 hex>","client":"scry-link/0.9.0"}`.
+  `status` is 200 for ok, 500 for a server-side tool error and 400 for any other; errors carry a fixed lowercase
+  `err_code` (`search_api_500`). `err_code` split: `INSUFFICIENT_CREDITS` 402, `ACCESS_DENIED` 403, `RATE_LIMITED` 429. `uid_hash` is the first 12 hex of sha256(uid + `SCRY_LOG_SALT`),
+  computed off the request path; **`SCRY_LOG_SALT` is a secret** (`wrangler secret put SCRY_LOG_SALT [--env staging]`, one random value per tier, never a var in git) and when it is unset in staging or
+  production `uid_hash` is omitted (no public fallback). `client` is the validated `x-scry-client`, captured at the request boundary:
+  the Durable Object's `onSSEMcpMessage` (SSE) and `withClientNote` in the Worker (`/mcp`, streamable HTTP) because the agents transports pass no requestInfo. No raw uid, email, query text or body. Mid-call diagnostics
+  (`logDiagnostic`) are fixed words plus `status`, `ms`, `err_code`, `uid_hash`; upstream error text is never logged.
+  Staging ships the lines to `scry-logs` via `tail_consumers`; find a call with `scry-management/scripts/scry-logs.py --request-id <id>`.
 - **generate_image** uses the request id as its run id: the AI Gateway `run`
   metadata, the Langfuse trace (`metadata.request_id`; the trace id is the ULID's
   128 bits in hex, `traceIdFor` in `src/telemetry/ids.ts`). The request id is
