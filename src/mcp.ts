@@ -738,11 +738,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       screenshotUrls.map(url => url ? this.getPresignedUrl(url) : Promise.resolve(null))
     );
 
-    // Format results for readability in Claude (text content, backward compat)
-    const formatted = data.results.map((r, i) => {
-      const jc = r.json_content as Record<string, unknown> | undefined;
-      const meta = extractResultMetadata(jc);
+    // Format results for readability in Claude (text content, backward compat).
+    // Split into two small helpers (identity/source vs. links/provenance) so
+    // neither carries every optional field's branch on its own (sonarjs
+    // cognitive-complexity) — behavior is identical to one flat function.
+    type SearchResultRow = (typeof data.results)[number];
+    type SearchResultMeta = ReturnType<typeof extractResultMetadata>;
 
+    const formatResultIdentityLines = (r: SearchResultRow, i: number, meta: SearchResultMeta): string[] => {
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
       if (meta.description) lines.push(`   ${meta.description}`);
       else if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
@@ -754,7 +757,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // line number, when the row has one, replaces the Storybook link a
       // native story has none of (G5).
       if (meta.sourcePath) {
-        lines.push(`   Source: ${meta.sourcePath}${meta.sourceLine ? `:${meta.sourceLine}` : ""}`);
+        const sourceLineSuffix = meta.sourceLine ? `:${meta.sourceLine}` : "";
+        lines.push(`   Source: ${meta.sourcePath}${sourceLineSuffix}`);
       }
       if (meta.storyPath && meta.storyPath !== meta.sourcePath) {
         lines.push(`   Story file: ${meta.storyPath}`);
@@ -764,6 +768,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           ? `   Story: ${meta.storyTitle} / ${meta.variant}`
           : `   Story: ${meta.storyTitle}`);
       }
+      return lines;
+    };
+
+    const formatResultLinkLines = (r: SearchResultRow, meta: SearchResultMeta): string[] => {
+      const lines: string[] = [];
       if (meta.figmaUrl) lines.push(`   Figma: ${meta.figmaUrl}`);
       if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
       if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
@@ -781,7 +790,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // another team's app is findable but not necessarily importable, and a
       // confident import of one produces a build error, not a missing feature.
       if (r.crossProject) lines.push(CROSS_PROJECT_WARNING);
-      return lines.join("\n");
+      return lines;
+    };
+
+    const formatted = data.results.map((r, i) => {
+      const jc = r.json_content as Record<string, unknown> | undefined;
+      const meta = extractResultMetadata(jc);
+      return [...formatResultIdentityLines(r, i, meta), ...formatResultLinkLines(r, meta)].join("\n");
     });
 
     const summary = withScopeNotice(
