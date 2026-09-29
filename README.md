@@ -100,8 +100,10 @@ contract in `scry-management/features/observability-request-id/briefs/_request-i
   `scry-management/lib/scry-log/`, standard `scry-management/skills/feature-workflow/references/logging-tracing-standard.md`):
   `{"v":1,"ts":"…","level":"info","service":"mcp","env":"staging","version":"<sha>","msg":"request","request_id":"01M…","route":"search_components","status":200,"ms":412,"project":"4vR5…","uid_hash":"<12 hex>","client":"scry-link/0.9.0"}`.
   `status` is 200 for ok, 500 for a server-side tool error and 400 for any other; errors carry a fixed lowercase
-  `err_code` (`search_api_500`). `uid_hash` is the first 12 hex of sha256(uid + `SCRY_LOG_SALT`); `client` is the validated
-  `x-scry-client` header when the MCP SDK passes it. No raw uid, email, query text or body. Mid-call diagnostics
+  `err_code` (`search_api_500`). `err_code` split: `INSUFFICIENT_CREDITS` 402, `ACCESS_DENIED` 403, `RATE_LIMITED` 429. `uid_hash` is the first 12 hex of sha256(uid + `SCRY_LOG_SALT`),
+  computed off the request path; **`SCRY_LOG_SALT` is a secret** (`wrangler secret put SCRY_LOG_SALT [--env staging]`, one random value per tier, never a var in git) and when it is unset in staging or
+  production `uid_hash` is omitted (no public fallback). `client` is the validated `x-scry-client`, captured at the request boundary:
+  the Durable Object's `onSSEMcpMessage` (SSE) and `withClientNote` in the Worker (`/mcp`, streamable HTTP) because the agents transports pass no requestInfo. No raw uid, email, query text or body. Mid-call diagnostics
   (`logDiagnostic`) are fixed words plus `status`, `ms`, `err_code`, `uid_hash`; upstream error text is never logged.
   Staging ships the lines to `scry-logs` via `tail_consumers`; find a call with `scry-management/scripts/scry-logs.py --request-id <id>`.
 - **generate_image** uses the request id as its run id: the AI Gateway `run`

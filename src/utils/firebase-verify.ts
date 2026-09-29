@@ -82,15 +82,15 @@ export async function verifyFirebaseIdToken(
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp <= now) { console.error("[firebase-verify] token expired", { exp: payload.exp, now }); return null; }
     if (payload.iat > now + 5) { console.error("[firebase-verify] iat in future", { iat: payload.iat, now }); return null; }
-    if (payload.aud !== projectId) { console.error("[firebase-verify] aud mismatch", { aud: payload.aud, projectId }); return null; }
-    if (payload.iss !== `https://securetoken.google.com/${projectId}`) { console.error("[firebase-verify] iss mismatch", { iss: payload.iss, projectId }); return null; }
+    if (payload.aud !== projectId) { console.error("[firebase-verify] aud mismatch"); return null; }
+    if (payload.iss !== `https://securetoken.google.com/${projectId}`) { console.error("[firebase-verify] iss mismatch"); return null; }
     if (!payload.sub || payload.sub.length === 0 || payload.sub.length > 128) { console.error("[firebase-verify] invalid sub"); return null; }
     if (payload.auth_time > now + 5) { console.error("[firebase-verify] auth_time in future"); return null; }
 
     // 2. Fetch Google's public keys
     const keys = await getGooglePublicKeys();
     const certPem = keys[header.kid];
-    if (!certPem) { console.error("[firebase-verify] kid not found", { kid: header.kid }); return null; }
+    if (!certPem) { console.error("[firebase-verify] kid not found"); return null; }
 
     // 3. Import public key from X.509 cert and verify signature
     const publicKey = await importX509(certPem, "RS256");
@@ -110,7 +110,7 @@ export async function verifyFirebaseIdToken(
     payload.uid = payload.sub;
     return payload;
   } catch (err) {
-    console.error("[firebase-verify] unexpected error", err);
+    console.error("[firebase-verify] unexpected error", err instanceof Error ? err.name : "unknown");
     return null;
   }
 }

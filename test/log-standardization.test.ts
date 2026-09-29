@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { REQUEST_ID_HEADER } from "../src/lib/request-id";
 import { wrapToolHandler } from "../src/lib/tool-request";
+import { withClientNote } from "../src/lib/client-note";
 import { validateLine, type LogLine, type Sink } from "../src/lib/scry-log";
 import { clientOf, errCodeOf, getLogger, hashUid, msgWords, setLogSinkForTest } from "../src/lib/log";
 import canary from "./fixtures/scry-log-canary.json";
@@ -78,6 +79,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** The request line hashes the uid off the request path, so lines land a few ticks after the tool returns. */
+const settle = () => new Promise(r => setTimeout(r, 25));
+
 const SEARCH_OK = { results: [], pagination: { page: 1, limit: 5, total: 0 } };
 
 describe("schema v1 golden lines", () => {
@@ -92,8 +96,9 @@ describe("schema v1 golden lines", () => {
       respond = () => new Response("broke", { status: 500 });
       await client.callTool({ name: "search_components", arguments: { query: "button" } });
     });
+    await settle();
     const lines = jsonLines(out).filter(l => l.msg === "request");
-    expect(lines.map(l => l.status)).toEqual([200, 400, 500]);
+    expect(lines.map(l => l.status)).toEqual([200, 403, 500]);
     expect(lines.map(l => l.level)).toEqual(["info", "warn", "error"]);
     expect(lines.map(l => l.err_code)).toEqual([undefined, "access_denied", "search_api_500"]);
     for (const l of jsonLines(out)) {
@@ -126,7 +131,7 @@ describe("mcp.ts diagnostics (was :198-206 raw uid, :422 Gemini error text)", ()
     vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ error: { message: `Blocked prompt: ${secretPrompt}` } }), { status: 400 }),
     );
-    await withClient({}, async client => {
+    await withClient({ SCRY_LOG_SALT: "test-salt" } as Partial<Env>, async client => {
       const r = await client.callTool({ name: "generate_image", arguments: { prompt: "a blue button" } });
       expect(r.isError).toBe(true);
     });
@@ -159,6 +164,7 @@ describe("guarantee-1 canary corpus never reaches a log line", () => {
     for (const v of values) {
       await boom({ query: v, project_id: v }, { requestInfo: { headers: new Headers({ "x-scry-client": v, [REQUEST_ID_HEADER]: v }) } });
     }
+    await settle();
     const text = JSON.stringify(sink.lines) + out.join("\n");
     expect(sink.lines).toHaveLength(values.length);
     for (const m of canary.markers) expect(text).not.toContain(m);
@@ -173,6 +179,7 @@ describe("guarantee-1 canary corpus never reaches a log line", () => {
     await h({}, { requestInfo: { headers: { "x-scry-client": "<b>x</b>" } } });
     await h({}, { requestInfo: { headers: { "x-scry-client": "scry-cli/1.2.3" } } });
     await h({});
+    await settle();
     expect(sink.lines.map(l => l.client)).toEqual(["scry-link/0.9.0", undefined, "scry-cli/1.2.3", undefined]);
     expect(clientOf(`a/${"9".repeat(200)}`)).toBeUndefined();
   });
@@ -241,5 +248,149 @@ describe("guarantee-4 a broken or slow sink never fails a tool call", () => {
       identify: () => { throw new Error("identify down"); },
     });
     expect(await h({}, {})).toEqual(answer);
+  });
+});
+
+describe("x-scry-client over the real agents transports (not injected by hand)", () => {
+  const rpc = (id: number | undefined, method: string, params: unknown) => JSON.stringify({ jsonrpc: "2.0", ...(id === undefined ? {} : { id }), method, params });
+
+  it("SSE: the header on the POST /sse/message Request reaches the request line", async () => {
+    const sink = collectingSink();
+    setLogSinkForTest(sink);
+    captureConsole();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(SEARCH_OK));
+    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.newUniqueId()) as unknown as DurableObjectStub<ScryMCP>;
+    await runInDurableObject(stub, async (instance: ScryMCP) => {
+      await instance._init(props);
+      const upgraded = await instance.fetch(new Request("https://mcp.test/sse", { headers: { Upgrade: "websocket", "x-partykit-room": "sse-client-test" } }));
+      const ws = upgraded.webSocket!;
+      ws.accept();
+      const replies: Array<{ id?: number }> = [];
+      ws.addEventListener("message", ev => replies.push(JSON.parse(String(ev.data))));
+      const post = (body: string, client?: string) =>
+        instance.onSSEMcpMessage("sse-client-test", new Request("https://mcp.test/sse/message?sessionId=sse-client-test", {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(client ? { "x-scry-client": client } : {}) },
+          body,
+        }));
+      expect(await post(rpc(1, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1" } }), "scry-link/0.9.0")).toBeNull();
+      await post(rpc(undefined, "notifications/initialized", {}), "scry-link/0.9.0");
+      await post(rpc(2, "tools/call", { name: "search_components", arguments: { query: "button" } }), "scry-link/0.9.0");
+      for (let i = 0; i < 100 && !replies.some(r => r.id === 2); i++) await new Promise(r => setTimeout(r, 20));
+      expect(replies.some(r => r.id === 2)).toBe(true);
+      ws.close();
+    });
+    await settle();
+    const lines = sink.lines.filter(l => l.msg === "request" && l.route === "search_components");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].client).toBe("scry-link/0.9.0");
+  });
+
+  it("streamable HTTP: the Worker handler passes the header to the session's object before delegating", async () => {
+    const sink = collectingSink();
+    setLogSinkForTest(sink);
+    captureConsole();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(SEARCH_OK));
+    const sessionId = "ab".repeat(32);
+    let delegated = 0;
+    const handler = withClientNote({ fetch: async (_r: Request, _e: Env, _c: ExecutionContext) => { delegated++; return new Response("ok"); } });
+    const res = await handler.fetch(
+      new Request("https://mcp.test/mcp", { method: "POST", headers: { "mcp-session-id": sessionId, "x-scry-client": "scry-cli/1.2.3" } }),
+      env,
+      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+    );
+    expect(await res.text()).toBe("ok");
+    expect(delegated).toBe(1);
+    // A malformed header or session id is ignored and still delegates.
+    await handler.fetch(new Request("https://mcp.test/mcp", { headers: { "mcp-session-id": "nope", "x-scry-client": "<b>" } }), env, {} as ExecutionContext);
+    expect(delegated).toBe(2);
+
+    const stub = env.MCP_OBJECT.get(env.MCP_OBJECT.idFromName(`streamable-http:${sessionId}`)) as unknown as DurableObjectStub<ScryMCP>;
+    await runInDurableObject(stub, async (instance: ScryMCP, state) => {
+      instance.props = props;
+      await instance.init();
+      const client = new Client({ name: "log-test", version: "1.0.0" });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await instance.server.connect(serverTransport);
+      await client.connect(clientTransport);
+      await client.callTool({ name: "search_components", arguments: { query: "button" } });
+      await client.close();
+      void state;
+    });
+    await settle();
+    const line = sink.lines.find(l => l.msg === "request" && l.route === "search_components");
+    expect(line?.client).toBe("scry-cli/1.2.3");
+  });
+});
+
+describe("uid_hash salt (M2)", () => {
+  it("is omitted in staging and production without SCRY_LOG_SALT, never a public salt", async () => {
+    expect(await hashUid(UID, undefined, "staging")).toBeUndefined();
+    expect(await hashUid(UID, "", "production")).toBeUndefined();
+    expect(await hashUid(UID, undefined, "development")).toMatch(/^[0-9a-f]{12}$/);
+    expect(await hashUid(UID, undefined)).toMatch(/^[0-9a-f]{12}$/); // no env = development
+    expect(await hashUid(UID, "s3cret", "production")).toMatch(/^[0-9a-f]{12}$/);
+    const publicSalt = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${UID}scry-log-v1`))).slice(0, 6), b => b.toString(16).padStart(2, "0")).join("");
+    expect(await hashUid(UID, undefined, "staging")).not.toBe(publicSalt);
+  });
+
+  it("a staging tool call without a salt writes a request line with no uid_hash", async () => {
+    const sink = collectingSink();
+    setLogSinkForTest(sink);
+    const h = wrapToolHandler("whoami", async () => ({ content: [] }), {
+      logger: getLogger({ SCRY_ENV: "staging" }),
+      identify: () => ({ uid: UID, salt: undefined, env: "staging" }),
+    });
+    await h({});
+    await settle();
+    expect(sink.lines).toHaveLength(1);
+    expect(sink.lines[0].uid_hash).toBeUndefined();
+  });
+});
+
+describe("status mapping and the request path (M4, M6)", () => {
+  it("INSUFFICIENT_CREDITS is 402, RATE_LIMITED 429, ACCESS_DENIED 403, unknown 400", async () => {
+    const sink = collectingSink();
+    setLogSinkForTest(sink);
+    for (const code of ["INSUFFICIENT_CREDITS", "RATE_LIMITED", "ACCESS_DENIED", "SAFETY_FILTERED"]) {
+      const h = wrapToolHandler("t", async () => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: code }) }] }), { logger: getLogger({ SCRY_ENV: "staging" }) });
+      await h({});
+    }
+    await settle();
+    expect(sink.lines.map(l => l.status)).toEqual([402, 429, 403, 400]);
+    expect(sink.lines.map(l => l.err_code)).toEqual(["insufficient_credits", "rate_limited", "access_denied", "safety_filtered"]);
+  });
+
+  it("the tool answer returns before the uid is hashed and logged (off the request path)", async () => {
+    const sink = collectingSink();
+    setLogSinkForTest(sink);
+    const h = wrapToolHandler("t", async () => ({ content: [] }), {
+      logger: getLogger({ SCRY_ENV: "staging" }),
+      identify: () => ({ uid: UID, salt: "s" }),
+    });
+    await h({});
+    expect(sink.lines).toHaveLength(0);
+    await settle();
+    expect(sink.lines).toHaveLength(1);
+    expect(sink.lines[0].uid_hash).toMatch(/^[0-9a-f]{12}$/);
+  });
+});
+
+describe("firebase-verify never logs unverified token claims (M3)", () => {
+  it("aud, iss and kid from an unsigned token never reach the console", async () => {
+    const out = captureConsole();
+    const b64 = (o: unknown) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+    const now = Math.floor(Date.now() / 1000);
+    const base = { exp: now + 600, iat: now, auth_time: now, sub: "u1" };
+    const tok = (payload: Record<string, unknown>, header: Record<string, unknown> = { alg: "RS256", kid: "KIDCANARY_5510" }) =>
+      `${b64(header)}.${b64({ ...base, ...payload })}.c2ln`;
+    const { verifyFirebaseIdToken } = await import("../src/utils/firebase-verify");
+    expect(await verifyFirebaseIdToken(tok({ aud: "AUDCANARY_5510", iss: "x" }), "proj")).toBeNull();
+    expect(await verifyFirebaseIdToken(tok({ aud: "proj", iss: "ISSCANARY_5510" }), "proj")).toBeNull();
+    expect(await verifyFirebaseIdToken("not.a.jwt-CANARY_5510", "proj")).toBeNull();
+    const text = out.join("\n");
+    for (const m of ["AUDCANARY_5510", "ISSCANARY_5510", "KIDCANARY_5510", "CANARY_5510"]) expect(text).not.toContain(m);
+    expect(text).toContain("aud mismatch");
+    expect(text).toContain("iss mismatch");
   });
 });

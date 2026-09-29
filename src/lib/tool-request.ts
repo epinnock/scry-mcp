@@ -150,15 +150,23 @@ export interface ToolWrapOptions {
   /** Shared scry-log logger for the default emit (the Durable Object passes its own, built from env). */
   logger?: Logger;
   /** The caller's raw uid and the uid_hash salt; only the salted hash is ever logged. */
-  identify?: () => { uid?: string; salt?: string };
+  identify?: () => { uid?: string; salt?: string; env?: string };
+  /**
+   * The caller's `x-scry-client`, captured at the request boundary (the Durable Object's SSE message entry or
+   * the Worker's /mcp handler). The agents transports pass no requestInfo to handlers, so this is the real path.
+   */
+  client?: () => string | undefined;
   /** Error reporting for a thrown handler. Default: Sentry with request_id + tool tags. */
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
 }
 
-/** HTTP-like status for a tool outcome: 200 ok; server-side failures 500; other tool errors 400. */
+/** HTTP-like status for a tool outcome: 200 ok; 402/403/429 for credits/access/rate limit; server-side failures 500; other tool errors 400. */
 function statusOf(line: RequestLine): number {
   if (line.outcome === "ok") return 200;
   const c = (line.code ?? "").toUpperCase();
+  if (c === "INSUFFICIENT_CREDITS") return 402;
+  if (c === "ACCESS_DENIED") return 403;
+  if (c === "RATE_LIMITED") return 429;
   return c === "INTERNAL_ERROR" || c === "UPSTREAM_TIMEOUT" || c.startsWith("GEMINI") || /_5\d\d$/.test(c) ? 500 : 400;
 }
 
@@ -239,9 +247,12 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
         });
         if (opts.emit) opts.emit(line);
         else {
+          // Fire and forget: the hash is computed inside the log call, never on the request path (G4).
           const who = opts.identify?.() ?? {};
-          const uid_hash = await hashUid(who.uid, who.salt);
-          defaultEmit(line, opts.logger, { uid_hash, client: clientFromArgs(args) });
+          const client = clientFromArgs(args) ?? clientOf(opts.client?.());
+          hashUid(who.uid, who.salt, who.env)
+            .then(uid_hash => defaultEmit(line, opts.logger, { uid_hash, client }))
+            .catch(() => {});
         }
       } catch {
         // Logging must never change the answer.

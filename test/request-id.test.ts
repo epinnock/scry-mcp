@@ -363,10 +363,11 @@ describe("tool calls through ScryMCP", () => {
   it("search_components mints one id, forwards it to search and logs it in the end line", async () => {
     const seen = mockFetch(() => Response.json(SEARCH_OK));
     const log = spyConsole();
-    await withClient({}, async (client) => {
+    await withClient({ SCRY_LOG_SALT: "test-salt" } as Partial<Env>, async (client) => {
       const r = await client.callTool({ name: "search_components", arguments: { query: CANARY_QUERY, limit: 5, project_id: "proj-1" } });
       expect(r.isError).not.toBe(true);
     });
+    await new Promise(r => setTimeout(r, 20)); // the request line hashes the uid off the request path
     const search = seen.filter(s => s.url.endsWith("/api/search"));
     expect(search).toHaveLength(1);
     const id = search[0].headers.get(REQUEST_ID_HEADER)!;
@@ -386,9 +387,10 @@ describe("tool calls through ScryMCP", () => {
       const r = await client.callTool({ name: "search_components", arguments: { query: "button", project_id: "not-my-project" } });
       expect(r.isError).toBe(true);
     });
+    await new Promise(r => setTimeout(r, 20));
     const lines = requestLines(log);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({ route: "search_components", level: "warn", status: 400, err_code: "access_denied" });
+    expect(lines[0]).toMatchObject({ route: "search_components", level: "warn", status: 403, err_code: "access_denied" });
     expect(lines[0]).not.toHaveProperty("project");
   });
 

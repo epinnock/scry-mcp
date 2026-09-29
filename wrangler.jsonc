@@ -5,6 +5,8 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
     "SCRY_ENV": "production",
+    // log-standardization: SCRY_LOG_SALT is a SECRET, not a var (wrangler secret put SCRY_LOG_SALT, and
+    // --env staging). uid_hash in the request line uses it; unset in staging/production = uid_hash omitted.
     // AI credits: ENFORCE in production (2026-09-24, founder skipped the shadow week;
     // rollback "shadow" or "off"). generate_image holds 40/150 on the caller's wallet in the
     // production diff-service ledger; secrets CREDITS_API_TOKEN (= production

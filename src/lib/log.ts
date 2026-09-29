@@ -6,7 +6,10 @@ export interface LogEnv {
   SCRY_ENV?: string;
   SCRY_COMMIT?: string;
   SCRY_LOG_DEBUG?: string;
-  /** Optional secret salt for uid_hash. Unset: a fixed public salt (still one-way, but guessable per uid). */
+  /**
+   * SECRET salt for uid_hash (`wrangler secret put SCRY_LOG_SALT`, never a var in git). Unset in staging or
+   * production: `uid_hash` is omitted (a public salt would let anyone confirm a known uid).
+   */
   SCRY_LOG_SALT?: string;
 }
 
@@ -34,11 +37,17 @@ export function getLogger(env: LogEnv | undefined): Logger {
   return log;
 }
 
-/** First 12 hex of sha256(uid + salt); undefined when there is no uid or hashing is unavailable. */
-export async function hashUid(uid: unknown, salt: string | undefined): Promise<string | undefined> {
+/**
+ * First 12 hex of sha256(uid + salt); undefined when there is no uid, no salt outside development, or hashing
+ * is unavailable. `scryEnv` is the Worker's SCRY_ENV: only development (local runs, tests) may hash without a
+ * configured secret, with a throwaway constant; staging and production never fall back to a public salt.
+ */
+export async function hashUid(uid: unknown, salt: string | undefined, scryEnv?: string): Promise<string | undefined> {
   if (typeof uid !== "string" || uid.length === 0) return undefined;
+  const used = salt || (schemaEnv(scryEnv) === "development" ? "scry-log-dev" : undefined);
+  if (!used) return undefined;
   try {
-    const bytes = new TextEncoder().encode(uid + (salt || "scry-log-v1"));
+    const bytes = new TextEncoder().encode(uid + used);
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(digest).slice(0, 6), b => b.toString(16).padStart(2, "0")).join("");
   } catch {
