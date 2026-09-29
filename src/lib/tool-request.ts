@@ -156,6 +156,8 @@ export interface ToolWrapOptions {
    * the Worker's /mcp handler). The agents transports pass no requestInfo to handlers, so this is the real path.
    */
   client?: () => string | undefined;
+  /** The edge's id for the HTTP request that carries this call (taken once); absent = mint one. */
+  requestId?: () => string | undefined;
   /** Error reporting for a thrown handler. Default: Sentry with request_id + tool tags. */
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
 }
@@ -219,7 +221,13 @@ type AnyHandler = (...args: any[]) => unknown;
 export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWrapOptions = {}): (...args: unknown[]) => Promise<unknown> {
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
-    const requestId = mintRequestId();
+    let requestId: string | undefined;
+    try {
+      requestId = opts.requestId?.();
+    } catch {
+      requestId = undefined;
+    }
+    requestId ??= mintRequestId();
     const start = Date.now();
     const store: ToolCallContext = { requestId };
     return context.run(store, async () => {

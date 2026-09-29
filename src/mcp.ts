@@ -35,7 +35,7 @@ import {
   type ImageTokenUsage,
 } from "./credits";
 import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type ResolvedWallet } from "./wallet";
-import { mintRequestId } from "./lib/request-id";
+import { REQUEST_ID_HEADER, mintRequestId } from "./lib/request-id";
 import { clientOf, errCodeOf, getLogger, hashUid, msgWords, type LogEnv } from "./lib/log";
 import { confirmProjectAccess, currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
@@ -119,12 +119,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   async onSSEMcpMessage(sessionId: string, request: Request) {
     this.noteClientValue(request.headers.get("x-scry-client"));
+    this.noteRequestId(request.headers.get(REQUEST_ID_HEADER));
     return super.onSSEMcpMessage(sessionId, request);
   }
 
   /** RPC from the Worker for streamable-HTTP requests (messages reach the object over a WebSocket without headers). */
-  async noteClient(value: string | null | undefined): Promise<void> {
+  async noteClient(value: string | null | undefined, requestId?: string): Promise<void> {
     this.noteClientValue(value);
+    this.noteRequestId(requestId);
+  }
+
+  // The edge (src/lib/edge-request.ts) mints one id per HTTP request and puts it on the request it hands
+  // downstream. The tool call that request triggers uses it, so its line and the edge line carry the SAME id.
+  // Taken once by the next tool call; a call with no noted id mints its own, as before.
+  private pendingRequestId: string | undefined;
+
+  private noteRequestId(value: string | null | undefined) {
+    if (typeof value === "string" && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(value)) this.pendingRequestId = value;
   }
 
   private noteClientValue(value: string | null | undefined) {
@@ -901,6 +912,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       logger: getLogger(this.env),
       identify: () => ({ uid: this.props?.firebaseUid, salt: (this.env as LogEnv).SCRY_LOG_SALT, env: this.env.SCRY_ENV }),
       client: () => this.sessionClient,
+      requestId: () => {
+        const id = this.pendingRequestId;
+        this.pendingRequestId = undefined;
+        return id;
+      },
     });
 
     // --- Register widget resources (MCP Apps UI) ---
