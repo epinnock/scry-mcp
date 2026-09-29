@@ -60,6 +60,8 @@
   "env": {
     "staging": {
       "name": "scry-mcp-staging",
+      // log-standardization: scry-logs reads this Worker's console lines (schema v1). Staging only; production is added at promotion.
+      "tail_consumers": [{ "service": "scry-logs-staging" }],
       "workers_dev": true,
       "routes": [],
       "vars": {

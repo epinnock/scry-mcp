@@ -342,10 +342,19 @@ function mockFetch(respond: (url: string) => Response): Seen[] {
   return seen;
 }
 
-function requestLines(spy: { mock: { calls: unknown[][] } }): RequestLine[] {
+/** Schema v1 request line (log-standardization), as the shared logger writes it. */
+type V1Line = Record<string, unknown> & { msg: string; request_id?: string; route?: string; status?: number; level?: string; err_code?: string; project?: string };
+
+/** Spy on console.log/warn/error together: scry-log writes by level (info=log, warn, error). */
+function spyConsole() {
+  const spies = (["log", "warn", "error"] as const).map(m => vi.spyOn(console, m));
+  return { mock: { get calls() { return spies.flatMap(s => s.mock.calls); } } };
+}
+
+function requestLines(spy: { mock: { calls: unknown[][] } }): V1Line[] {
   return spy.mock.calls
     .map(c => { try { return JSON.parse(String(c[0])); } catch { return null; } })
-    .filter((l): l is RequestLine => l?.msg === "request");
+    .filter((l): l is V1Line => l?.msg === "request");
 }
 
 const SEARCH_OK = { results: [], pagination: { page: 1, limit: 5, total: 0 } };
@@ -353,7 +362,7 @@ const SEARCH_OK = { results: [], pagination: { page: 1, limit: 5, total: 0 } };
 describe("tool calls through ScryMCP", () => {
   it("search_components mints one id, forwards it to search and logs it in the end line", async () => {
     const seen = mockFetch(() => Response.json(SEARCH_OK));
-    const log = vi.spyOn(console, "log");
+    const log = spyConsole();
     await withClient({}, async (client) => {
       const r = await client.callTool({ name: "search_components", arguments: { query: CANARY_QUERY, limit: 5, project_id: "proj-1" } });
       expect(r.isError).not.toBe(true);
@@ -364,7 +373,7 @@ describe("tool calls through ScryMCP", () => {
     expect(id).toMatch(ULID);
     expect(search[0].headers.get("Authorization")).toBe("Bearer test-api-key");
     const lines = requestLines(log);
-    expect(lines).toEqual([{ msg: "request", request_id: id, route: "search_components", outcome: "ok", ms: expect.any(Number), project_id: "proj-1" }]);
+    expect(lines).toEqual([{ v: 1, ts: expect.any(String), level: "info", service: "mcp", env: expect.stringMatching(/^(staging|development)$/), msg: "request", request_id: id, route: "search_components", status: 200, ms: expect.any(Number), project: "proj-1", uid_hash: expect.stringMatching(/^[0-9a-f]{12}$/) }]);
     // guarantee-3: no uid, email or query text in the request line
     const text = JSON.stringify(lines);
     for (const canary of [CANARY_UID, CANARY_EMAIL, CANARY_QUERY]) expect(text).not.toContain(canary);
@@ -372,15 +381,15 @@ describe("tool calls through ScryMCP", () => {
 
   it("low #12: search_components for a project the caller cannot access logs no project_id", async () => {
     mockFetch(() => Response.json({ error: "ACCESS_DENIED", message: "no access" }, { status: 403 }));
-    const log = vi.spyOn(console, "log");
+    const log = spyConsole();
     await withClient({}, async (client) => {
       const r = await client.callTool({ name: "search_components", arguments: { query: "button", project_id: "not-my-project" } });
       expect(r.isError).toBe(true);
     });
     const lines = requestLines(log);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({ route: "search_components", outcome: "error", code: "ACCESS_DENIED" });
-    expect(lines[0]).not.toHaveProperty("project_id");
+    expect(lines[0]).toMatchObject({ route: "search_components", level: "warn", status: 400, err_code: "access_denied" });
+    expect(lines[0]).not.toHaveProperty("project");
   });
 
   it("low #12: issue tools log project_id only after the dashboard answered", async () => {
@@ -390,23 +399,23 @@ describe("tool calls through ScryMCP", () => {
       SCRY_AGENT_ASSERTION_SECRET: "agent-secret",
     };
     mockFetch(() => Response.json({ error: "not_found" }, { status: 404 }));
-    let log = vi.spyOn(console, "log");
+    let log = spyConsole();
     await withClient(dashEnv, async (client) => {
       await client.callTool({ name: "list_design_issues", arguments: { project_id: "not-my-project" } });
     });
     let lines = requestLines(log);
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({ route: "list_design_issues", outcome: "error" });
-    expect(lines[0]).not.toHaveProperty("project_id");
+    expect(lines[0]).toMatchObject({ route: "list_design_issues", level: "warn" });
+    expect(lines[0]).not.toHaveProperty("project");
 
     vi.restoreAllMocks();
     mockFetch(() => Response.json({ issues: [], next_cursor: null }));
-    log = vi.spyOn(console, "log");
+    log = spyConsole();
     await withClient(dashEnv, async (client) => {
       await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
     });
     lines = requestLines(log);
-    expect(lines).toEqual([expect.objectContaining({ route: "list_design_issues", outcome: "ok", project_id: "proj-1" })]);
+    expect(lines).toEqual([expect.objectContaining({ route: "list_design_issues", status: 200, project: "proj-1" })]);
   });
 
   it("each tool call gets its own id", async () => {
@@ -422,7 +431,7 @@ describe("tool calls through ScryMCP", () => {
 
   it("a search error's JSON carries the same request_id that was forwarded", async () => {
     const seen = mockFetch(() => new Response("upstream broke", { status: 500 }));
-    const log = vi.spyOn(console, "log");
+    const log = spyConsole();
     let body: Record<string, unknown> = {};
     await withClient({}, async (client) => {
       const r = await client.callTool({ name: "search_components", arguments: { query: "button" } });
@@ -431,7 +440,7 @@ describe("tool calls through ScryMCP", () => {
     });
     const id = seen.find(s => s.url.endsWith("/api/search"))!.headers.get(REQUEST_ID_HEADER);
     expect(body).toMatchObject({ error: "SEARCH_API_500", retryable: true, request_id: id });
-    expect(requestLines(log)).toEqual([expect.objectContaining({ request_id: id, outcome: "error", code: "SEARCH_API_500" })]);
+    expect(requestLines(log)).toEqual([expect.objectContaining({ request_id: id, status: 500, err_code: "search_api_500" })]);
   });
 
   it("a network failure to search becomes a structured error with request_id", async () => {
