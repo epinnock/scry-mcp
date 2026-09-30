@@ -56,13 +56,16 @@
       }
     ]
   },
+  // log-standardization: the production scry-logs Worker reads this Worker's console lines (schema v1).
+  // Staging overrides this with its own tail_consumers (scry-logs-staging).
+  "tail_consumers": [{ "service": "scry-logs" }],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ScryMCP"] }
   ],
   "env": {
     "staging": {
       "name": "scry-mcp-staging",
-      // log-standardization: scry-logs reads this Worker's console lines (schema v1). Staging only; production is added at promotion.
+      // log-standardization: scry-logs-staging reads this Worker's console lines (schema v1); production: top-level tail_consumers.
       "tail_consumers": [{ "service": "scry-logs-staging" }],
       "workers_dev": true,
       "routes": [],
