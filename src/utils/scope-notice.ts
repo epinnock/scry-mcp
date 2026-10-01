@@ -18,6 +18,10 @@
 export const CROSS_PROJECT_WARNING =
   "   ⚠ From a DIFFERENT project in your organisation. Verify it is published as a shared package before importing it — it may not be reachable from this repo.";
 
+/** The cross-project notice for an image row: nothing to import, so the risk is reuse rights, not a build error. */
+export const VISUAL_CROSS_PROJECT_WARNING =
+  "   ⚠ From a DIFFERENT project in your organisation. Check you may reuse this image before using it elsewhere.";
+
 export interface ScopeOutcome {
   /** The scope the search API answered with. Absent when no project_id was sent. */
   scope?: string;
