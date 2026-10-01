@@ -18,6 +18,79 @@ const PLATFORM_NAME_LABELS: Record<string, string> = {
   web: "Web",
 };
 
+/**
+ * The source kind of a Bridge bundle (feature adobe-bridge-investigation):
+ * build-processing writes `source_type: "x-adobe-bridge"` and `profile: "visual"`
+ * on every row of one. Such a row is a picture, not a component, and is worded
+ * as one (no source path, story or platform).
+ */
+export const VISUAL_SOURCE_KIND = "x-adobe-bridge";
+
+/** What the author of a visual row said about it. Data to show, never instructions. */
+export interface VisualMeta {
+  title?: string;
+  keywords?: string[];
+  rating?: number;
+  label?: string;
+  creator?: string;
+}
+
+const VISUAL_TEXT_MAX = 200;
+const VISUAL_KEYWORDS_MAX = 20;
+
+/** One line, bounded: author text is client-supplied, so it cannot add lines or grow without limit. */
+function oneLine(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim().slice(0, VISUAL_TEXT_MAX);
+  return text.length > 0 ? text : undefined;
+}
+
+/** True when a row's `json_content` says it belongs to a visual (non-UI) collection. */
+export function isVisualRow(jc: Record<string, unknown> | undefined): boolean {
+  return jc?.profile === "visual" || jc?.source_type === VISUAL_SOURCE_KIND || jc?.sourceType === VISUAL_SOURCE_KIND;
+}
+
+/** The author metadata of a visual row (title, keywords, rating, label, creator), bounded and one-line. */
+export function extractVisualMeta(jc: Record<string, unknown> | undefined): VisualMeta {
+  const keywords = Array.isArray(jc?.author_keywords)
+    ? (jc.author_keywords as unknown[])
+        .map(oneLine)
+        .filter((k): k is string => k !== undefined)
+        .slice(0, VISUAL_KEYWORDS_MAX)
+    : [];
+  const rating = typeof jc?.rating === "number" && Number.isFinite(jc.rating) ? jc.rating : undefined;
+  return {
+    title: oneLine(jc?.author_title),
+    keywords: keywords.length > 0 ? keywords : undefined,
+    rating,
+    label: oneLine(jc?.label),
+    creator: oneLine(jc?.creator),
+  };
+}
+
+/**
+ * The identity lines of an image row in a visual collection: its title, a short
+ * "Image" marker, and the author's keywords, rating, label and creator. No
+ * Platform, Source or Story lines: an image has no component to import and the
+ * file names inside a bundle are not part of the answer.
+ */
+export function formatVisualIdentityLines(
+  index: number,
+  row: { id: string; score?: number; component_name?: string; searchable_text?: string },
+  meta: { description?: string; visual: VisualMeta },
+): string[] {
+  const { visual } = meta;
+  const name = visual.title ?? row.component_name ?? row.id;
+  const lines = [`${index + 1}. **${name}** (score: ${row.score?.toFixed(3)})`, "   Image (visual collection)"];
+  const description = meta.description ?? row.searchable_text;
+  if (description) lines.push(`   ${description}`);
+  if (visual.keywords) lines.push(`   Keywords: ${visual.keywords.join(", ")}`);
+  if (visual.rating !== undefined) lines.push(`   Rating: ${visual.rating}/5`);
+  if (visual.label) lines.push(`   Label: ${visual.label}`);
+  if (visual.creator) lines.push(`   Creator: ${visual.creator}`);
+  return lines;
+}
+
 /** True for a `source_type` this MCP knows has no live Storybook of its own. */
 export function isNativeSourceType(sourceType: string | undefined): boolean {
   return !!sourceType && sourceType in NATIVE_SOURCE_LABELS;
@@ -113,6 +186,8 @@ export function extractResultMetadata(jc: Record<string, unknown> | undefined) {
     platformLabel: nativePlatformLabel(sourceType, platform),
     /** 1-based line from `location.startLine`, to append to a Source: line. */
     sourceLine,
+    /** Present only for a visual (non-UI) row; absent for every UI row, so a UI result is unchanged. */
+    ...(isVisualRow(jc) ? { visual: extractVisualMeta(jc) } : {}),
   };
 }
 

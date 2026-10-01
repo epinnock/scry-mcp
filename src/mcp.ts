@@ -7,8 +7,9 @@ import {
   extractProvenance,
   extractResultMetadata,
   formatProvenanceLine,
+  formatVisualIdentityLines,
 } from "./utils/result-metadata.js";
-import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
+import { CROSS_PROJECT_WARNING, VISUAL_CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import {
   DEFAULT_VERSIONS,
   extractDuplicatesCollapsed,
@@ -56,6 +57,8 @@ const RATE_LIMIT_RPM = 60;         // max requests per user per minute
 const MAX_QUERY_LENGTH = 500;      // max characters for text queries
 const MAX_PROJECT_ID_LENGTH = 128; // max characters for project_id filter
 const SEARCH_SCOPES = ["project", "org"] as const; // explicit scope; "project" never widens
+const MAX_SOURCE_LENGTH = 100;     // max characters for the source filter (same bound as the search API)
+const SOURCE_SHAPE = /^[A-Za-z0-9_.:-]+$/; // same allow-list as the search API: letters, digits, . _ - :
 const MAX_IMAGE_BASE64_BYTES = 10 * 1024 * 1024; // 10MB max for base64 image input
 const MAX_PROMPT_LENGTH = 4000;                  // max characters for image generation prompt
 const IMAGE_GENERATION_TIMEOUT_MS = 60_000;      // 60s timeout — Gemini image gen takes 10-30s
@@ -780,6 +783,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     type SearchResultMeta = ReturnType<typeof extractResultMetadata>;
 
     const formatResultIdentityLines = (r: SearchResultRow, i: number, meta: SearchResultMeta): string[] => {
+      // adobe-bridge-investigation: an image row in a visual collection says so and shows its
+      // author's keywords; it has no component, source path or story to show.
+      if (meta.visual) return formatVisualIdentityLines(i, r, { description: meta.description, visual: meta.visual });
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
       if (meta.description) lines.push(`   ${meta.description}`);
       else if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
@@ -832,7 +838,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // reachable from the repo it is editing. Say it outright: a component in
       // another team's app is findable but not necessarily importable, and a
       // confident import of one produces a build error, not a missing feature.
-      if (r.crossProject) lines.push(CROSS_PROJECT_WARNING);
+      if (r.crossProject) lines.push(meta.visual ? VISUAL_CROSS_PROJECT_WARNING : CROSS_PROJECT_WARNING);
       return lines;
     };
 
@@ -879,6 +885,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         platform: meta.platform,
         sourceType: meta.sourceType,
         platformLabel: meta.platformLabel,
+        // A visual (non-UI) row only: absent for every UI row.
+        ...(meta.visual ? { profile: "visual" as const, ...meta.visual } : {}),
         projectId: r.project_id,
         crossProject: r.crossProject === true,
         // Same values the text output renders, unrolled so a widget does not
@@ -1012,6 +1020,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "  says how many older versions were hidden. Screens that exist only in an older build are",
           "  still returned (marked stale). Pass versions: 'all' to list every indexed version.",
           "",
+          "Visual collections:",
+          "- A project can hold images instead of UI (photos, illustrations, brand assets, for example imported",
+          "  from Adobe Bridge). Those results are marked 'Image (visual collection)' and carry the author's",
+          "  keywords, rating, label and creator; they have no source path or story.",
+          "- Pass source: 'x-adobe-bridge' to return only those rows. Omit source for UI projects: nothing changes.",
+          "",
           "Constraints:",
           "- Query must be 1–500 characters",
           "- Returns max 50 results per page",
@@ -1047,19 +1061,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             "versions exist (versionCount). 'all': every indexed version of every screen, as before. " +
             "Any other value is rejected by the search API (INVALID_VERSIONS)."
           ),
+          source: z.string().max(MAX_SOURCE_LENGTH).regex(SOURCE_SHAPE).optional().describe(
+            "Only rows of this capture source kind. Use 'x-adobe-bridge' for images imported from " +
+            "Adobe Bridge (a visual collection). Omit it for UI projects: nothing changes."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ query, limit, page, project_id, scope, versions }) => {
+      async ({ query, limit, page, project_id, scope, versions, source }) => {
         this.log("search_components", {});
         if (!this.checkRateLimit()) {
           this.logDiagnostic("search_components", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
-        this.logDiagnostic("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope, versionsAll: versions === "all" });
+        this.logDiagnostic("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope, versionsAll: versions === "all", hasSource: !!source });
 
         return this.callSearchAPI({
           text: query,
@@ -1068,6 +1086,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           project_id,
           scope,
           versions,
+          ...(source ? { source } : {}),
         });
       }
     );
@@ -1088,6 +1107,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "",
           "Versions: same rules as search_components — by default one result per screen (the newest",
           "indexed copy, with its version count); pass versions: 'all' to list every indexed version.",
+          "",
+          "Visual collections: rows that are images (for example imported from Adobe Bridge) are marked",
+          "'Image (visual collection)'. Pass source: 'x-adobe-bridge' to return only those; omit it for UI projects.",
           "",
           "Constraints:",
           "- Image must be base64-encoded PNG or JPG, under 10MB",
@@ -1115,12 +1137,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             "versions exist (versionCount). 'all': every indexed version of every screen, as before. " +
             "Any other value is rejected by the search API (INVALID_VERSIONS)."
           ),
+          source: z.string().max(MAX_SOURCE_LENGTH).regex(SOURCE_SHAPE).optional().describe(
+            "Only rows of this capture source kind. Use 'x-adobe-bridge' for images imported from " +
+            "Adobe Bridge (a visual collection). Omit it for UI projects: nothing changes."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ image, query, limit, page, project_id, scope, versions }) => {
+      async ({ image, query, limit, page, project_id, scope, versions, source }) => {
         this.log("search_by_image", {});
         if (!this.checkRateLimit()) {
           this.logDiagnostic("search_by_image", { rateLimited: true });
@@ -1132,7 +1158,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           return this.toolError("VALIDATION_ERROR", `Image too large (${(image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`, false);
         }
 
-        this.logDiagnostic("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope, versionsAll: versions === "all" });
+        this.logDiagnostic("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope, versionsAll: versions === "all", hasSource: !!source });
 
         return this.callSearchAPI({
           image,
@@ -1142,6 +1168,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           project_id,
           scope,
           versions,
+          ...(source ? { source } : {}),
         });
       }
     );
