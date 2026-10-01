@@ -9,6 +9,14 @@ import {
   formatProvenanceLine,
 } from "./utils/result-metadata.js";
 import { CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
+import {
+  DEFAULT_VERSIONS,
+  extractDuplicatesCollapsed,
+  extractVersionCount,
+  formatCollapsedSentence,
+  formatVersionLine,
+  type VersionsMode,
+} from "./utils/version-info.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE } from "./utils/caller-assertion.js";
@@ -725,7 +733,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         latest_build_id?: string;
         freshness?: string;
         freshness_reason?: string;
+        /**
+         * How many indexed copies of this screen the row stands for (feature
+         * search-dedup). Absent from an API that predates it.
+         */
+        version_count?: number;
       }>;
+      /** Rows folded away as older copies of a returned screen. Absent from an older API. */
+      duplicates_collapsed?: number;
       pagination: { page: number; limit: number; total: number; total_pages?: number };
       /** The scope that answered — always the one requested. Absent without project_id. */
       scope?: string;
@@ -752,6 +767,10 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const presignResults = await Promise.all(
       screenshotUrls.map(url => url ? this.getPresignedUrl(url) : Promise.resolve(null))
     );
+
+    // What the caller asked for, as the API will have applied it. Only used to
+    // word the version line; the counts themselves come from the API.
+    const versionsMode: VersionsMode = body.versions === "all" ? "all" : DEFAULT_VERSIONS;
 
     // Format results for readability in Claude (text content, backward compat).
     // Split into two small helpers (identity/source vs. links/provenance) so
@@ -796,7 +815,16 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // rendered, including as "build unknown · unknown": a result an agent
       // cannot date is a result it should not treat as current, and silence
       // reads as currency (roadmap-open-questions-code-answers.md B.1).
-      lines.push(`   ${formatProvenanceLine(extractProvenance(r as unknown as Record<string, unknown>))}`);
+      const provenance = extractProvenance(r as unknown as Record<string, unknown>);
+      lines.push(`   ${formatProvenanceLine(provenance)}`);
+      // How many indexed copies of this screen the row stands for. Absent
+      // (an API without dedup) renders nothing rather than "1".
+      const versionLine = formatVersionLine(
+        extractVersionCount(r as unknown as Record<string, unknown>),
+        versionsMode,
+        provenance.buildSha?.slice(0, 7) ?? provenance.buildId,
+      );
+      if (versionLine) lines.push(`   ${versionLine}`);
       const screenshotUrl = r.screenshot_url || meta.screenshotUrl;
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
@@ -814,8 +842,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       return [...formatResultIdentityLines(r, i, meta), ...formatResultLinkLines(r, meta)].join("\n");
     });
 
+    // "9 screens, 11 older versions hidden": rows on this page equal previews.
+    const duplicatesCollapsed = extractDuplicatesCollapsed(data.duplicates_collapsed);
+    const collapsedSentence = formatCollapsedSentence(data.results.length, duplicatesCollapsed);
     const summary = withScopeNotice(
-      `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})`,
+      `Found ${data.pagination.total} results (page ${data.pagination.page}/${data.pagination.total_pages || 1})` +
+        (collapsedSentence ? ` — ${collapsedSentence}` : ""),
       {
         scope: data.scope,
         widenedToOrg: data.widenedToOrg,
@@ -858,6 +890,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         latestBuildId: provenance.latestBuildId,
         freshness: provenance.freshness,
         freshnessReason: provenance.freshnessReason,
+        // Indexed copies of this screen the row stands for; absent when the
+        // API did not say.
+        versionCount: extractVersionCount(r as unknown as Record<string, unknown>),
       };
     });
 
@@ -868,6 +903,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         summary,
         scope: data.scope,
         widenedToOrg: data.widenedToOrg === true,
+        versions: versionsMode,
+        duplicatesCollapsed,
       },
     };
   }
@@ -968,6 +1005,13 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "  when the intent is to search broadly. scope: 'org' requires project_id.",
           "- Check the projectId on each result before acting on it.",
           "",
+          "Versions:",
+          "- Every build of a project indexes its screens again, so one screen can exist many times.",
+          "  By default (versions: 'latest') you get ONE result per screen, the newest indexed copy;",
+          "  its 'Versions: N indexed' line / versionCount says how many copies exist, and the summary",
+          "  says how many older versions were hidden. Screens that exist only in an older build are",
+          "  still returned (marked stale). Pass versions: 'all' to list every indexed version.",
+          "",
           "Constraints:",
           "- Query must be 1–500 characters",
           "- Returns max 50 results per page",
@@ -998,19 +1042,24 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             "projects in the same organisation that opted in to discovery and that you can read; " +
             "their results are marked crossProject. Requires project_id."
           ),
+          versions: z.string().max(16).default(DEFAULT_VERSIONS).describe(
+            "'latest' (default): one result per screen, the newest indexed copy, each saying how many " +
+            "versions exist (versionCount). 'all': every indexed version of every screen, as before. " +
+            "Any other value is rejected by the search API (INVALID_VERSIONS)."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ query, limit, page, project_id, scope }) => {
+      async ({ query, limit, page, project_id, scope, versions }) => {
         this.log("search_components", {});
         if (!this.checkRateLimit()) {
           this.logDiagnostic("search_components", { rateLimited: true });
           return this.toolError("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
         }
 
-        this.logDiagnostic("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope });
+        this.logDiagnostic("search_components", { queryLength: query.length, limit, page, hasProjectId: !!project_id, scope, versionsAll: versions === "all" });
 
         return this.callSearchAPI({
           text: query,
@@ -1018,6 +1067,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           page,
           project_id,
           scope,
+          versions,
         });
       }
     );
@@ -1035,6 +1085,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Scope: same rules as search_components — scope 'project' (default) searches only",
           "project_id and never widens; scope 'org' also returns opted-in, readable sibling",
           "projects' components, marked ⚠. scope 'org' requires project_id.",
+          "",
+          "Versions: same rules as search_components — by default one result per screen (the newest",
+          "indexed copy, with its version count); pass versions: 'all' to list every indexed version.",
           "",
           "Constraints:",
           "- Image must be base64-encoded PNG or JPG, under 10MB",
@@ -1057,12 +1110,17 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
             "'project' (default): only project_id, never widens. 'org': also include opted-in, " +
             "readable sibling projects; their results are marked crossProject. Requires project_id."
           ),
+          versions: z.string().max(16).default(DEFAULT_VERSIONS).describe(
+            "'latest' (default): one result per screen, the newest indexed copy, each saying how many " +
+            "versions exist (versionCount). 'all': every indexed version of every screen, as before. " +
+            "Any other value is rejected by the search API (INVALID_VERSIONS)."
+          ),
         },
         _meta: {
           ui: { resourceUri: SEARCH_RESULTS_WIDGET_URI },
         },
       },
-      async ({ image, query, limit, page, project_id, scope }) => {
+      async ({ image, query, limit, page, project_id, scope, versions }) => {
         this.log("search_by_image", {});
         if (!this.checkRateLimit()) {
           this.logDiagnostic("search_by_image", { rateLimited: true });
@@ -1074,7 +1132,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           return this.toolError("VALIDATION_ERROR", `Image too large (${(image.length / 1024 / 1024).toFixed(1)}MB). Max 10MB base64.`, false);
         }
 
-        this.logDiagnostic("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope });
+        this.logDiagnostic("search_by_image", { imageSize: image.length, hasQuery: !!query, limit, page, scope, versionsAll: versions === "all" });
 
         return this.callSearchAPI({
           image,
@@ -1083,6 +1141,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           page,
           project_id,
           scope,
+          versions,
         });
       }
     );

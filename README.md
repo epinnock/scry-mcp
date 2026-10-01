@@ -33,8 +33,8 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 
 | Tool | Description |
 |------|-------------|
-| `search_components` | Text-based semantic + keyword hybrid search over UI components. `scope: "project"` (default) never widens; `scope: "org"` also returns opted-in, readable sibling projects' rows, marked `crossProject` |
-| `search_by_image` | Visual similarity search using base64 image input; same `scope` semantics |
+| `search_components` | Text-based semantic + keyword hybrid search over UI components. `scope: "project"` (default) never widens; `scope: "org"` also returns opted-in, readable sibling projects' rows, marked `crossProject`. `versions: "latest"` (default) returns one result per screen (the newest indexed copy, with `versionCount` and a `Versions: N indexed` line); `versions: "all"` lists every indexed version |
+| `search_by_image` | Visual similarity search using base64 image input; same `scope` and `versions` semantics |
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
