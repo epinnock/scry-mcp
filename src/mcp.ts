@@ -8,6 +8,8 @@ import {
   extractResultMetadata,
   formatProvenanceLine,
   formatVisualIdentityLines,
+  visualStructuredText,
+  VISUAL_UNTRUSTED_NOTE,
 } from "./utils/result-metadata.js";
 import { CROSS_PROJECT_WARNING, VISUAL_CROSS_PROJECT_WARNING, withScopeNotice } from "./utils/scope-notice.js";
 import {
@@ -813,10 +815,14 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
     const formatResultLinkLines = (r: SearchResultRow, meta: SearchResultMeta): string[] => {
       const lines: string[] = [];
-      if (meta.figmaUrl) lines.push(`   Figma: ${meta.figmaUrl}`);
-      if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
-      if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
-      if (meta.tags?.length) lines.push(`   Tags: ${meta.tags.join(", ")}`);
+      // A visual row has no Figma, GitHub or Storybook link and no tags to show: those fields are
+      // author-controlled text in its bundle, so they are left out rather than printed unquoted.
+      if (!meta.visual) {
+        if (meta.figmaUrl) lines.push(`   Figma: ${meta.figmaUrl}`);
+        if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
+        if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
+        if (meta.tags?.length) lines.push(`   Tags: ${meta.tags.join(", ")}`);
+      }
       // Which build this came from and whether it is the current one. Always
       // rendered, including as "build unknown · unknown": a result an agent
       // cannot date is a result it should not treat as current, and silence
@@ -867,26 +873,30 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const widgetResults = data.results.map((r, i) => {
       const meta = extractResultMetadata(r.json_content as Record<string, unknown> | undefined);
       const provenance = extractProvenance(r as unknown as Record<string, unknown>);
+      // A visual row's author-controlled strings are escaped, bounded and one-line here too: most hosts
+      // hand structuredContent to the model, so it is not a side door around the quoted text.
+      const visualText = meta.visual ? visualStructuredText(r, { description: meta.description, visual: meta.visual }) : undefined;
       return {
-        name: r.component_name || r.id,
+        name: visualText?.name ?? (r.component_name || r.id),
         score: r.score,
         screenshotUrl: presignResults[i]?.url,
-        searchableText: r.searchable_text,
-        description: meta.description,
-        sourcePath: meta.sourcePath,
-        storyPath: meta.storyPath,
-        storyTitle: meta.storyTitle,
-        variant: meta.variant,
-        figmaUrl: meta.figmaUrl,
-        githubUrl: meta.githubUrl,
-        storybookUrl: meta.storybookUrl,
-        tags: meta.tags,
+        searchableText: visualText ? visualText.searchableText : r.searchable_text,
+        description: visualText ? visualText.description : meta.description,
+        // Component fields stay absent for a visual row (they are bundle-author text, not shown in the text either).
+        sourcePath: visualText ? undefined : meta.sourcePath,
+        storyPath: visualText ? undefined : meta.storyPath,
+        storyTitle: visualText ? undefined : meta.storyTitle,
+        variant: visualText ? undefined : meta.variant,
+        figmaUrl: visualText ? undefined : meta.figmaUrl,
+        githubUrl: visualText ? undefined : meta.githubUrl,
+        storybookUrl: visualText ? undefined : meta.storybookUrl,
+        tags: visualText ? undefined : meta.tags,
         // feature capture-sources: absent for the legacy web default.
         platform: meta.platform,
         sourceType: meta.sourceType,
         platformLabel: meta.platformLabel,
         // A visual (non-UI) row only: absent for every UI row.
-        ...(meta.visual ? { profile: "visual" as const, ...meta.visual } : {}),
+        ...(meta.visual ? { profile: "visual" as const, ...meta.visual, untrustedText: VISUAL_UNTRUSTED_NOTE } : {}),
         projectId: r.project_id,
         crossProject: r.crossProject === true,
         // Same values the text output renders, unrolled so a widget does not
