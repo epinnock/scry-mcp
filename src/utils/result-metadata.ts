@@ -5,10 +5,17 @@
  * can gate on `nativePlatformLabel(...) !== undefined` / `isNativeSourceType`.
  */
 const NATIVE_SOURCE_LABELS: Record<string, string> = {
+  // Kinds as registered in the SCF kind enum (scry-capture-format schema/scf-1.0.json).
   "storybook-rn": "React Native",
+  "swiftui-preview": "SwiftUI",
+  "compose-preview": "Compose",
+  "flutter-golden": "Flutter",
+  widgetbook: "Widgetbook",
+  uikit: "UIKit",
+  // Legacy aliases the table carried before it was aligned to the registered kinds.
   rn: "React Native",
-  compose: "Compose",
   swiftui: "SwiftUI",
+  compose: "Compose",
   flutter: "Flutter",
 };
 

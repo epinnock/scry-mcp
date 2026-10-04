@@ -169,3 +169,51 @@ describe("extractResultMetadata — capture-sources platform and native gating",
     expect(isNativeSourceType("storybook")).toBe(false);
   });
 });
+
+/**
+ * Guarantee-6 flavour (feature flutter-capture, ledger F33): the label table is keyed by the kinds the SCF
+ * spec registers, so every registered native kind must read as a labelled native source. This list mirrors the
+ * native kinds of the `kind` enum in scry-capture-format schema/scf-1.0.json; add a kind there and here together.
+ */
+describe("native kind labels match the registered SCF kinds", () => {
+  const registeredNativeKinds: Array<[string, string]> = [
+    ["storybook-rn", "React Native"],
+    ["swiftui-preview", "SwiftUI"],
+    ["compose-preview", "Compose"],
+    ["flutter-golden", "Flutter"],
+    ["widgetbook", "Widgetbook"],
+    ["uikit", "UIKit"],
+  ];
+
+  it.each(registeredNativeKinds)("%s has a label and counts as native", (kind, label) => {
+    expect(isNativeSourceType(kind)).toBe(true);
+    expect(nativePlatformLabel(kind, undefined)).toBe(label);
+  });
+
+  it("shows the platform for Flutter, SwiftUI and Compose builds", () => {
+    expect(nativePlatformLabel("flutter-golden", "android")).toBe("Flutter · Android");
+    expect(nativePlatformLabel("flutter-golden", "ios")).toBe("Flutter · iOS");
+    expect(nativePlatformLabel("flutter-golden", "other")).toBe("Flutter · Other");
+    expect(nativePlatformLabel("swiftui-preview", "ios")).toBe("SwiftUI · iOS");
+    expect(nativePlatformLabel("compose-preview", "android")).toBe("Compose · Android");
+  });
+
+  it("keeps the legacy aliases", () => {
+    expect(nativePlatformLabel("rn", "ios")).toBe("React Native · iOS");
+    expect(nativePlatformLabel("swiftui", "ios")).toBe("SwiftUI · iOS");
+    expect(nativePlatformLabel("compose", "android")).toBe("Compose · Android");
+    expect(nativePlatformLabel("flutter", "android")).toBe("Flutter · Android");
+  });
+
+  it("leaves web and unregistered kinds unlabelled", () => {
+    for (const kind of [undefined, "storybook", "playwright", "x-adobe-bridge", "x-flutter"]) {
+      expect(isNativeSourceType(kind)).toBe(false);
+      expect(nativePlatformLabel(kind, "android")).toBeUndefined();
+    }
+  });
+
+  it("extractResultMetadata labels a flutter-golden row", () => {
+    const meta = extractResultMetadata({ source_type: "flutter-golden", platform: "android" });
+    expect(meta.platformLabel).toBe("Flutter · Android");
+  });
+});
