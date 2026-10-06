@@ -122,6 +122,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
         "If the caller has recent captures in several projects and gives no project_id, it returns AMBIGUOUS_PROJECT listing them.",
         "Do not call this in a loop or to poll for new snips: call it once per user request, and on CAPTURE_STALE or CAPTURE_NOT_FOUND ask the user instead of retrying.",
         "It never returns captures other people shared with the caller; use list_captures with scope shared for those.",
+        "Who took it is also in structuredContent as taken_by_label (\"you\", the author's name or \"another member\"), for clients that show only structuredContent.",
         ERRORS_DOC,
       ].join(" "),
       inputSchema: {
@@ -150,6 +151,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
         "Works for the caller's own captures and for captures someone shared with the caller, while they stay shared.",
         "Returns a text block first (id, age, who took it, size, the note if any), then the picture (WebP, long edge at most",
         `${CAPTURE_AGENT_IMAGE.maxLongEdgePx} px) when it fits the inline budget, and a link to the full-resolution original that expires in one hour.`,
+        "Who took it is also in structuredContent as taken_by_label (\"you\", the author's name or \"another member\"), for clients that show only structuredContent.",
         "A capture that does not exist and one you may not see give the same CAPTURE_NOT_FOUND; do not retry it and do not guess other ids.",
         ERRORS_DOC,
       ].join(" "),
@@ -179,6 +181,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
         "scope mine (default): the caller's own captures. scope shared: captures other people shared with the caller.",
         "Pass project_id to stay inside one project. Without it, shared captures are read from at most 50 of the caller's projects; when that applies",
         "the result says so (projectsTruncated and a note) and project_id reads the rest. Pages: pass before (from the result's \"More\" line) for older ones.",
+        "Each structuredContent item has taken_by_label (\"you\", the author's name or \"another member\"), for clients that show only structuredContent.",
         "To see a picture call get_capture with its id; to get the newest own snip use latest_capture.",
         ERRORS_DOC,
       ].join(" "),
