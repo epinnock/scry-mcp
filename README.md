@@ -59,6 +59,34 @@ of the 60 req/min limit.
 | `request_verify` | Re-check now (free, 20/project/hour, 200/day) or `rediff: true` (10 credits) |
 | `comment_design_issue` | Timeline comment, optionally proposing a fix side |
 
+### Snip capture tools (stage; `CAPTURE_TOOLS_ENABLED="1"`)
+
+Screenshots the user took with Scry Snip, read by an agent ("fix the screenshot I just took").
+Four tools, no more. They call the dashboard's `/api/agent/captures/*` over the same signed
+`X-Scry-Caller` hop and the same env vars as the issue tools; the dashboard decides who may read a
+snip (the owner, or an audience the owner turned on) and writes nothing about it to a log.
+Production has no flag until the feature's Gate B. `delete_capture` is capped at 10/min/user.
+
+Every result starts with a text block (capture id, how old, who took it, size), then the picture
+(WebP, long edge at most 1280 px, about 70 KB, inlined only up to 75 KB; both numbers live in
+`src/captures/constants.ts` as `CAPTURE_AGENT_IMAGE`), and a signed link to the original that
+expires in one hour. A picture that is over budget or cannot be fetched degrades to the link only.
+The Sync app produces the rendition; this server does no image processing.
+
+| Tool | Description |
+|------|-------------|
+| `latest_capture` | The caller's own newest capture in one project. Use once when the user says they just snipped something; never in a loop. `maxAgeMinutes` (default 15) widens the window |
+| `get_capture` | One capture by id (own, or shared with the caller) |
+| `list_captures` | Text list, newest first. `scope` `mine` (default) or `shared`, `project_id`, `limit` (max 50), `before`. Surfaces `projectsTruncated` and its note when the unscoped shared list hit the 50-project cap |
+| `delete_capture` | Permanently delete a capture the caller took (owner only) |
+
+Errors are JSON `{error, message, retryable}` with `isError`: `CAPTURE_STALE` (newest is older than
+the window; carries its id and age), `AMBIGUOUS_PROJECT` (the message lists the projects),
+`CAPTURE_NOT_READY` (still uploading), `CAPTURE_NOT_FOUND` (a missing capture and one the caller may
+not see are byte-identical), `CAPTURE_NOT_OWNER` (delete), plus the generic `RATE_LIMITED`,
+`SERVER_MISCONFIGURED`, `TIMEOUT`, `DASHBOARD_UNREACHABLE`. The note a user typed is returned
+quoted and labelled as untrusted data. No log line carries a capture id, note, app name or URL.
+
 ## Usage analytics
 
 Each tool handler invocation records one Workers Analytics Engine data point for
@@ -139,6 +167,7 @@ scry-mcp/
 │   ├── firebase-handler.ts     # Auth handler — login UI + Firebase verification
 │   ├── mcp.ts                  # MCP server — 5 tools (search, screenshot, generate_image, whoami)
 │   ├── credits.ts / wallet.ts  # AI-credits hold/settle against the diff-service ledger
+│   ├── captures/               # snip-capture tools (constants, format, tools)
 │   ├── llm-gateway.ts          # Cloudflare AI Gateway routing for Gemini
 │   ├── telemetry/              # Langfuse spans -> TELEMETRY_QUEUE producer
 │   └── utils/
