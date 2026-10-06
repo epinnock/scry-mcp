@@ -93,6 +93,9 @@
         // scry-dashboard-agent). Stage dashboard is behind Vercel protection: secret
         // SCRY_DASHBOARD_BYPASS_TOKEN. Production keeps the tools off until Gate B.
         "ISSUE_TOOLS_ENABLED": "1",
+        // Snip capture tools (latest/get/list/delete_capture): ON in stage only; production has no
+        // CAPTURE_TOOLS_ENABLED until the snip-capture feature's Gate B.
+        "CAPTURE_TOOLS_ENABLED": "1",
         "SCRY_DASHBOARD_API_URL": "https://dashboard-stage.scrymore.com"
       },
       // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).

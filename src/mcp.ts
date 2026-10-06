@@ -25,6 +25,8 @@ import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE } from "./utils/caller-assertion.js";
 import { DashboardAgentClient, SlidingWindowLimiter, agentClientLabel } from "./issues/client";
 import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
+import { CAPTURE_WRITE_RATE_LIMIT_RPM } from "./captures/constants";
+import { registerCaptureTools } from "./captures/tools";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
@@ -142,6 +144,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   // --- Issue tools (feature issue-resolution): MCP → dashboard /api/agent/issues/* ---
   private dashboardAssertion = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
   private issueWriteLimiter = new SlidingWindowLimiter(ISSUE_WRITE_RATE_LIMIT_RPM);
+  private captureWriteLimiter = new SlidingWindowLimiter(CAPTURE_WRITE_RATE_LIMIT_RPM);
 
   /**
    * Client for the dashboard's agent issue API, or null when unconfigured.
@@ -1553,6 +1556,18 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         client: () => this.dashboardAgentClient(),
         checkRateLimit: () => this.checkRateLimit(),
         writeLimiter: this.issueWriteLimiter,
+        log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
+      });
+    }
+
+    // --- Snip capture tools (feature snip-capture): latest/get/list/delete over /api/agent/captures/* ---
+    // Same dashboard hop as the issue tools. Off unless CAPTURE_TOOLS_ENABLED="1" (stage first;
+    // production stays off until the feature's Gate B). Kill switch: unset or any other value.
+    if (this.env.CAPTURE_TOOLS_ENABLED === "1") {
+      registerCaptureTools(this.server, {
+        client: () => this.dashboardAgentClient(),
+        checkRateLimit: () => this.checkRateLimit(),
+        writeLimiter: this.captureWriteLimiter,
         log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
       });
     }

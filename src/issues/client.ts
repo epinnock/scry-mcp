@@ -53,7 +53,7 @@ export class DashboardAgentClient {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
   }
 
-  private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<ApiResult> {
+  private async request(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<ApiResult> {
     const headers: Record<string, string> = {
       "X-Scry-Caller": await this.opts.assertion(),
       Accept: "application/json",
@@ -130,6 +130,33 @@ export class DashboardAgentClient {
   comment(issueId: number, body: { body: string; propose_fix_side?: string }): Promise<ApiResult> {
     return this.request("POST", `/api/agent/issues/${issueId}/comment`, body);
   }
+
+  // --- Snip captures (feature snip-capture): /api/agent/captures/* ---
+  // The dashboard is the only enforcement point (owner-or-recipient and membership re-checked on every
+  // call); this client only carries the signed caller assertion. Ids go in the path or query URL-encoded.
+
+  captureLatest(q: { project_id?: string; within_minutes?: number }): Promise<ApiResult> {
+    return this.request("GET", `/api/agent/captures/latest${queryString(q)}`);
+  }
+
+  captureGet(captureId: string, q: { project_id?: string } = {}): Promise<ApiResult> {
+    return this.request("GET", `/api/agent/captures/${encodeURIComponent(captureId)}${queryString(q)}`);
+  }
+
+  captureList(q: { scope?: string; project_id?: string; limit?: number; before?: number }): Promise<ApiResult> {
+    return this.request("GET", `/api/agent/captures${queryString(q)}`);
+  }
+
+  captureDelete(captureId: string, q: { project_id?: string } = {}): Promise<ApiResult> {
+    return this.request("DELETE", `/api/agent/captures/${encodeURIComponent(captureId)}${queryString(q)}`);
+  }
+}
+
+function queryString(q: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+  const s = params.toString();
+  return s ? `?${s}` : "";
 }
 
 function imageParams(q: ImageQuery): string {

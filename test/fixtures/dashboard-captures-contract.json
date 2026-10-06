@@ -1,0 +1,347 @@
+{
+  "source": "scry-developer-dashboard origin/stage app/api/agent/captures/* (PR 2 squash 7b0f766), run against its fake Firestore",
+  "responses": {
+    "latest_ok": {
+      "request": "GET /api/agent/captures/latest (alice)",
+      "status": 200,
+      "body": {
+        "capture": {
+          "captureId": "cap_own1",
+          "projectId": "p1",
+          "status": "ready",
+          "capturedByUid": "alice",
+          "capturedByName": "Alice A",
+          "capturedAt": "2026-10-06T03:22:38.614Z",
+          "receivedAt": "2026-10-06T03:22:38.614Z",
+          "expiresAt": "2026-10-16T03:24:38.614Z",
+          "ageSeconds": 120,
+          "width": 1200,
+          "height": 800,
+          "bytes": 1000,
+          "scale": 2,
+          "os": "mac",
+          "mode": "region",
+          "note": "The save button is clipped",
+          "appName": "Figma",
+          "access": "owner",
+          "sharing": {
+            "sharedWith": [
+              "bob"
+            ],
+            "sharedWithOrgIds": [],
+            "sharedWithProject": false,
+            "link": null
+          },
+          "previewUrl": "https://r2.test/p1/captures/cap_own1/preview.jpg?X-Amz-Signature=sig",
+          "originalUrl": "https://r2.test/p1/captures/cap_own1/original.png?X-Amz-Signature=sig",
+          "agentUrl": "https://r2.test/p1/captures/cap_own1/agent.webp?X-Amz-Signature=sig"
+        }
+      }
+    },
+    "get_owner": {
+      "request": "GET /api/agent/captures/cap_own1 (alice)",
+      "status": 200,
+      "body": {
+        "capture": {
+          "captureId": "cap_own1",
+          "projectId": "p1",
+          "status": "ready",
+          "capturedByUid": "alice",
+          "capturedByName": "Alice A",
+          "capturedAt": "2026-10-06T03:22:38.614Z",
+          "receivedAt": "2026-10-06T03:22:38.614Z",
+          "expiresAt": "2026-10-16T03:24:38.614Z",
+          "ageSeconds": 120,
+          "width": 1200,
+          "height": 800,
+          "bytes": 1000,
+          "scale": 2,
+          "os": "mac",
+          "mode": "region",
+          "note": "The save button is clipped",
+          "appName": "Figma",
+          "access": "owner",
+          "sharing": {
+            "sharedWith": [
+              "bob"
+            ],
+            "sharedWithOrgIds": [],
+            "sharedWithProject": false,
+            "link": null
+          },
+          "previewUrl": "https://r2.test/p1/captures/cap_own1/preview.jpg?X-Amz-Signature=sig",
+          "originalUrl": "https://r2.test/p1/captures/cap_own1/original.png?X-Amz-Signature=sig",
+          "agentUrl": "https://r2.test/p1/captures/cap_own1/agent.webp?X-Amz-Signature=sig"
+        },
+        "publicLinksEnabled": true
+      }
+    },
+    "get_recipient": {
+      "request": "GET /api/agent/captures/cap_own1 (bob, shared with bob)",
+      "status": 200,
+      "body": {
+        "capture": {
+          "captureId": "cap_own1",
+          "projectId": "p1",
+          "status": "ready",
+          "capturedByUid": "alice",
+          "capturedByName": "Alice A",
+          "capturedAt": "2026-10-06T03:22:38.614Z",
+          "receivedAt": "2026-10-06T03:22:38.614Z",
+          "expiresAt": "2026-10-16T03:24:38.614Z",
+          "ageSeconds": 120,
+          "width": 1200,
+          "height": 800,
+          "bytes": 1000,
+          "scale": 2,
+          "os": "mac",
+          "mode": "region",
+          "note": "The save button is clipped",
+          "appName": "Figma",
+          "access": "person",
+          "previewUrl": "https://r2.test/p1/captures/cap_own1/preview.jpg?X-Amz-Signature=sig",
+          "originalUrl": "https://r2.test/p1/captures/cap_own1/original.png?X-Amz-Signature=sig",
+          "agentUrl": "https://r2.test/p1/captures/cap_own1/agent.webp?X-Amz-Signature=sig"
+        },
+        "publicLinksEnabled": true
+      }
+    },
+    "get_hidden": {
+      "request": "GET /api/agent/captures/cap_own1 (dan, an admin it is not shared with)",
+      "status": 404,
+      "body": {
+        "error": "not_found"
+      }
+    },
+    "get_missing": {
+      "request": "GET /api/agent/captures/cap_9999 (alice)",
+      "status": 404,
+      "body": {
+        "error": "not_found"
+      }
+    },
+    "list_mine": {
+      "request": "GET /api/agent/captures?scope=mine (alice)",
+      "status": 200,
+      "body": {
+        "captures": [
+          {
+            "captureId": "cap_own1",
+            "projectId": "p1",
+            "status": "ready",
+            "capturedByUid": "alice",
+            "capturedByName": "Alice A",
+            "capturedAt": "2026-10-06T03:22:38.614Z",
+            "receivedAt": "2026-10-06T03:22:38.614Z",
+            "expiresAt": "2026-10-16T03:24:38.614Z",
+            "ageSeconds": 120,
+            "width": 1200,
+            "height": 800,
+            "bytes": 1000,
+            "scale": 2,
+            "os": "mac",
+            "mode": "region",
+            "note": "The save button is clipped",
+            "appName": "Figma",
+            "access": "owner",
+            "sharing": {
+              "sharedWith": [
+                "bob"
+              ],
+              "sharedWithOrgIds": [],
+              "sharedWithProject": false,
+              "link": null
+            },
+            "previewUrl": "https://r2.test/p1/captures/cap_own1/preview.jpg?X-Amz-Signature=sig",
+            "agentUrl": "https://r2.test/p1/captures/cap_own1/agent.webp?X-Amz-Signature=sig"
+          }
+        ],
+        "nextBefore": null,
+        "publicLinksEnabled": true
+      }
+    },
+    "list_shared": {
+      "request": "GET /api/agent/captures?scope=shared_with_me (carol: sees bob project-wide share)",
+      "status": 200,
+      "body": {
+        "captures": [
+          {
+            "captureId": "cap_bob1",
+            "projectId": "p1",
+            "status": "ready",
+            "capturedByUid": "bob",
+            "capturedByName": "Bob B",
+            "capturedAt": "2026-10-06T03:22:38.614Z",
+            "receivedAt": "2026-10-06T03:15:38.614Z",
+            "expiresAt": "2026-10-16T03:24:38.614Z",
+            "ageSeconds": 540,
+            "width": 1200,
+            "height": 800,
+            "bytes": 1000,
+            "scale": 2,
+            "os": "mac",
+            "mode": "region",
+            "note": null,
+            "appName": null,
+            "access": "project",
+            "previewUrl": "https://r2.test/p1/captures/cap_bob1/preview.jpg?X-Amz-Signature=sig",
+            "agentUrl": "https://r2.test/p1/captures/cap_bob1/agent.webp?X-Amz-Signature=sig"
+          }
+        ],
+        "nextBefore": null,
+        "publicLinksEnabled": true
+      }
+    },
+    "list_empty": {
+      "request": "GET /api/agent/captures?scope=mine (frank)",
+      "status": 200,
+      "body": {
+        "captures": [],
+        "nextBefore": null,
+        "publicLinksEnabled": true
+      }
+    },
+    "list_bad_scope": {
+      "request": "GET /api/agent/captures?scope=everyone (alice)",
+      "status": 400,
+      "body": {
+        "error": "invalid_scope"
+      }
+    },
+    "delete_not_owner": {
+      "request": "DELETE /api/agent/captures/cap_own1 (bob, a recipient)",
+      "status": 403,
+      "body": {
+        "error": "owner_only"
+      }
+    },
+    "delete_hidden": {
+      "request": "DELETE /api/agent/captures/cap_own1 (dan)",
+      "status": 404,
+      "body": {
+        "error": "not_found"
+      }
+    },
+    "delete_ok": {
+      "request": "DELETE /api/agent/captures/cap_own1 (alice)",
+      "status": 200,
+      "body": {
+        "deleted": true,
+        "objects": 3
+      }
+    },
+    "latest_not_found": {
+      "request": "GET /api/agent/captures/latest (alice, no captures)",
+      "status": 404,
+      "body": {
+        "error": "CAPTURE_NOT_FOUND"
+      }
+    },
+    "latest_not_ready": {
+      "request": "GET /api/agent/captures/latest (alice, only a pending one)",
+      "status": 409,
+      "body": {
+        "error": "CAPTURE_NOT_READY"
+      }
+    },
+    "latest_stale": {
+      "request": "GET /api/agent/captures/latest (alice, newest is 42 min old)",
+      "status": 409,
+      "body": {
+        "error": "CAPTURE_STALE",
+        "captureId": "cap_old1",
+        "ageSeconds": 2520,
+        "withinMinutes": 15
+      }
+    },
+    "latest_ambiguous": {
+      "request": "GET /api/agent/captures/latest (alice, fresh snips in p1 and p2)",
+      "status": 409,
+      "body": {
+        "error": "AMBIGUOUS_PROJECT",
+        "projectIds": [
+          "p1",
+          "p2"
+        ]
+      }
+    },
+    "list_shared_truncated": {
+      "request": "GET /api/agent/captures?scope=shared_with_me&limit=3 (bob in 55 projects)",
+      "status": 200,
+      "body": {
+        "captures": [
+          {
+            "captureId": "cap_px01",
+            "projectId": "px01",
+            "status": "ready",
+            "capturedByUid": "zed",
+            "capturedByName": "Zed Z",
+            "capturedAt": "2026-10-06T03:22:38.687Z",
+            "receivedAt": "2026-10-06T03:23:38.687Z",
+            "expiresAt": "2026-10-16T03:24:38.687Z",
+            "ageSeconds": 60,
+            "width": 1200,
+            "height": 800,
+            "bytes": 1000,
+            "scale": 2,
+            "os": "mac",
+            "mode": "region",
+            "note": null,
+            "appName": null,
+            "access": "project",
+            "previewUrl": "https://r2.test/px01/captures/cap_px01/preview.jpg?X-Amz-Signature=sig",
+            "agentUrl": "https://r2.test/px01/captures/cap_px01/agent.webp?X-Amz-Signature=sig"
+          },
+          {
+            "captureId": "cap_px02",
+            "projectId": "px02",
+            "status": "ready",
+            "capturedByUid": "zed",
+            "capturedByName": "Zed Z",
+            "capturedAt": "2026-10-06T03:22:38.687Z",
+            "receivedAt": "2026-10-06T03:22:38.687Z",
+            "expiresAt": "2026-10-16T03:24:38.687Z",
+            "ageSeconds": 120,
+            "width": 1200,
+            "height": 800,
+            "bytes": 1000,
+            "scale": 2,
+            "os": "mac",
+            "mode": "region",
+            "note": null,
+            "appName": null,
+            "access": "project",
+            "previewUrl": "https://r2.test/px02/captures/cap_px02/preview.jpg?X-Amz-Signature=sig",
+            "agentUrl": "https://r2.test/px02/captures/cap_px02/agent.webp?X-Amz-Signature=sig"
+          },
+          {
+            "captureId": "cap_px03",
+            "projectId": "px03",
+            "status": "ready",
+            "capturedByUid": "zed",
+            "capturedByName": "Zed Z",
+            "capturedAt": "2026-10-06T03:22:38.687Z",
+            "receivedAt": "2026-10-06T03:21:38.687Z",
+            "expiresAt": "2026-10-16T03:24:38.687Z",
+            "ageSeconds": 180,
+            "width": 1200,
+            "height": 800,
+            "bytes": 1000,
+            "scale": 2,
+            "os": "mac",
+            "mode": "region",
+            "note": null,
+            "appName": null,
+            "access": "project",
+            "previewUrl": "https://r2.test/px03/captures/cap_px03/preview.jpg?X-Amz-Signature=sig",
+            "agentUrl": "https://r2.test/px03/captures/cap_px03/agent.webp?X-Amz-Signature=sig"
+          }
+        ],
+        "nextBefore": 1791256898687,
+        "projectsTruncated": true,
+        "note": "You belong to 56 projects; project-wide shares were read from 50 of them. Pass project_id to list the rest.",
+        "publicLinksEnabled": true
+      }
+    }
+  }
+}
