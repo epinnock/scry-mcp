@@ -1,8 +1,9 @@
 /**
  * Text rendering and error mapping for the four capture tools. Agents read `content[0].text`, so the
  * capture id, age, author and size are in the text itself; the same data is returned as
- * `structuredContent` (including `taken_by_label`, because some clients show the model only that). The
- * note is user-written text: it is quoted and labelled as data, and it is never logged (guarantee G6). Signed URLs appear only in the result, never in a log line.
+ * `structuredContent` (including `taken_by_label`, for clients that show the model only that). The note
+ * is user-written text: it is quoted and labelled as data, and it is never logged (guarantee G6).
+ * Signed URLs appear only in the result, never in a log line.
  */
 import { CAPTURE_AGENT_IMAGE, LATEST_DEFAULT_MAX_AGE_MINUTES, SIGNED_URL_SECONDS } from "./constants";
 
@@ -155,15 +156,17 @@ function whoTook(capture: Json): string {
 }
 
 /**
- * The who-label for `structuredContent`. Claude Code gives the model structuredContent only (the text
- * block is dropped), so the author must be in it. It is derived from the same two fields the text
- * block already uses (`access`, and `capturedByName` when the agent API sends it), so it reveals nothing
- * the caller could not already read: "you" for the caller's own snip, the sanitised author name when
- * the agent API returned one, otherwise "another member".
+ * The who-label for `structuredContent`, for clients that give the model structuredContent without the
+ * text block (finding F162). It is derived from the same two fields the text block already uses
+ * (`access`, and `capturedByName` when the agent API sends it), so it reveals nothing the caller could
+ * not already read. The two reserved values, "you" (the caller's own snip) and "another member" (no
+ * name), are bare; any author name is JSON-quoted like the text block does, so no name, however
+ * it is typed, can equal a reserved value and make a shared snip read as the caller's own.
  */
 export function takenByLabel(capture: Json): string {
   if (capture.access === "owner") return "you";
-  return safeName(capture.capturedByName) ?? "another member";
+  const name = safeName(capture.capturedByName);
+  return name ? JSON.stringify(name) : "another member";
 }
 
 function sizeLine(width: number | undefined, height: number | undefined, bytes: number | undefined): string {

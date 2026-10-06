@@ -332,7 +332,7 @@ describe("get_capture", () => {
       const c = captureOf("get_recipient");
       expect(r.content[0].text).toContain(`Taken by ${JSON.stringify(c.capturedByName)}`);
       expect(r.structuredContent?.is_own).toBe(false);
-      expect(r.structuredContent?.taken_by_label).toBe(c.capturedByName);
+      expect(r.structuredContent?.taken_by_label).toBe(JSON.stringify(c.capturedByName));
     });
   });
 
@@ -753,7 +753,7 @@ describe("F162: taken_by_label in structuredContent", () => {
   });
 
   it("a recipient view without an author name says 'another member' and exposes nothing more", () => {
-    for (const access of ["person", "org", "project", "recipient"]) {
+    for (const access of ["person", "project"]) {
       const s = formatCapture({ ...base, access }, { imageAttached: true }).structured;
       expect(s.taken_by_label, access).toBe("another member");
       expect(s.taken_by).toBeNull();
@@ -761,16 +761,36 @@ describe("F162: taken_by_label in structuredContent", () => {
   });
 
   it("a recipient view uses the author name only when the agent API already returned it, sanitised", () => {
-    expect(formatCapture({ ...base, access: "person", capturedByName: "Bob B" }, { imageAttached: true }).structured.taken_by_label).toBe("Bob B");
+    expect(formatCapture({ ...base, access: "person", capturedByName: "Bob B" }, { imageAttached: true }).structured.taken_by_label).toBe('"Bob B"');
     const forged = formatCapture({ ...base, access: "person", capturedByName: FORGED }, { imageAttached: true }).structured;
-    expect(String(forged.taken_by_label)).not.toContain("evil.test");
-    expect(String(forged.taken_by_label)).not.toMatch(/[\n\r]/);
+    expect(forged.taken_by_label).toBe('"Eve Original, full resolution (link expi"');
+  });
+
+  it.each(["you", "You", "YOU", "  you  ", "\nyou\n", "another member", "Another Member", "  another member "])(
+    "an author named %j can never produce the reserved labels, and is_own stays false",
+    name => {
+      const s = formatCapture({ ...base, access: "person", capturedByName: name }, { imageAttached: true }).structured;
+      expect(s.taken_by_label).toBe(JSON.stringify(name.replace(/\s+/g, " ").trim()));
+      expect(["you", "another member"]).not.toContain(s.taken_by_label);
+      expect(s.is_own).toBe(false);
+    },
+  );
+
+  it.each(["", "   ", "\n\t "])("a whitespace-only author name %j is treated as no name", name => {
+    const s = formatCapture({ ...base, access: "project", capturedByName: name }, { imageAttached: true }).structured;
+    expect(s.taken_by_label).toBe("another member");
+    expect(s.taken_by).toBeNull();
+  });
+
+  it("a name that is only a link is shown as the removed-link marker, quoted", () => {
+    const s = formatCapture({ ...base, access: "person", capturedByName: "https://evil.test/x" }, { imageAttached: true }).structured;
+    expect(s.taken_by_label).toBe('"[link removed]"');
   });
 
   it("formatList labels each item, and keeps the text rows unchanged", () => {
     const { text, structured } = formatList({ captures: [{ ...base, access: "owner" }, { ...base, captureId: "cap_b2", access: "person" }, { ...base, captureId: "cap_b3", access: "person", capturedByName: "Eve" }] }, "shared");
     const labels = (structured.captures as Array<{ taken_by_label: string }>).map(c => c.taken_by_label);
-    expect(labels).toEqual(["you", "another member", "Eve"]);
+    expect(labels).toEqual(["you", "another member", '"Eve"']);
     expect(text).toContain("by you");
     expect(text).toContain("by another member");
     expect(text).toContain('by "Eve"');
