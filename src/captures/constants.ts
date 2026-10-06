@@ -5,17 +5,20 @@
  * server only verifies it, so the MCP never resizes anything: it inlines the stored rendition when it
  * fits `inlineMaxBytes` and otherwise returns the link alone. Claude Code counts an MCP image's
  * base64 text against its tool-output cap (default 25,000 tokens, about 100k base64 characters or
- * 75 KB of image), so the budget is the safe side of that cap.
+ * 75,000 bytes of image), so the budget is the safe side of that cap.
  *
  * Spike F1 (real client caps and WebP legibility) decides the final numbers: change them here only.
  */
+/** Claude Code's default MCP output cap (25,000 tokens) is about this many base64 characters. */
+const CLIENT_BASE64_CHAR_CAP = 100_000;
+
 export const CAPTURE_AGENT_IMAGE = {
   /** Long edge the app renders the agent picture to; named in the tool text, never enforced here. */
   maxLongEdgePx: 1280,
   /** Target size the app sizes the WebP to (about 70 KB). */
   targetBytes: 70 * 1024,
-  /** Largest rendition this server inlines; anything bigger is link-only. */
-  inlineMaxBytes: 75 * 1024,
+  /** Largest rendition this server inlines (base64 grows it by 4/3, so this encodes to at most the cap above); bigger is link-only. */
+  inlineMaxBytes: Math.floor(CLIENT_BASE64_CHAR_CAP / 4) * 3,
   /** Give up fetching the rendition after this long; a missing picture is never an error. */
   fetchTimeoutMs: 10_000,
 } as const;

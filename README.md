@@ -68,7 +68,7 @@ snip (the owner, or an audience the owner turned on) and writes nothing about it
 Production has no flag until the feature's Gate B. `delete_capture` is capped at 10/min/user.
 
 Every result starts with a text block (capture id, how old, who took it, size), then the picture
-(WebP, long edge at most 1280 px, about 70 KB, inlined only up to 75 KB; both numbers live in
+(WebP, long edge at most 1280 px, about 70 KB, inlined only up to 75,000 bytes (about 100k base64 characters); both numbers live in
 `src/captures/constants.ts` as `CAPTURE_AGENT_IMAGE`), and a signed link to the original that
 expires in one hour. A picture that is over budget or cannot be fetched degrades to the link only.
 The Sync app produces the rendition; this server does no image processing.

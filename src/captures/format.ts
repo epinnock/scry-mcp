@@ -20,12 +20,33 @@ export interface ToolErrorShape {
   detail: Json;
 }
 
-/** The one message every "cannot read it" 404 gets, so a missing snip and a hidden one are byte-identical. */
+/**
+ * The one message every "not found" answer gets (a missing snip, a hidden one, an empty `latest`, a
+ * 200 without a capture), so the answer never depends on why. It must stay id-neutral.
+ */
 export const CAPTURE_NOT_FOUND_MESSAGE =
-  "No capture with that id is available to you. It may not exist, may have been deleted or may have expired. Do not retry; ask the user for a fresh snip or call list_captures.";
+  "No capture is available to you for this request. It may not exist, may have been deleted or may have expired. Do not retry; ask the user to take a fresh snip (Control+Option+4 on Mac, Ctrl+Shift+4 on Windows in Scry Sync) or call list_captures.";
 
-const NO_READY_CAPTURE_MESSAGE =
-  "You have no ready capture in this scope. Ask the user to take a snip (Control+Option+4 on Mac, Ctrl+Shift+4 on Windows in Scry Sync), then call latest_capture once.";
+const NAME_MAX_CHARS = 40;
+
+/**
+ * An author name is typed by another person and reaches the agent inside our own text, so it is
+ * reduced to one short plain line: control characters and line breaks become a space, links are
+ * removed and the length is capped. Callers also JSON-quote it.
+ */
+export function safeName(v: unknown): string | undefined {
+  const raw = str(v);
+  if (!raw) return undefined;
+  const clean = raw
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069]+/g, " ")
+    .replace(/https?:\/\/\S*/gi, "[link removed]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, NAME_MAX_CHARS)
+    .trim();
+  return clean.length > 0 ? clean : undefined;
+}
+
 
 /** "42 minutes" style span, no "ago". */
 export function humanSpan(seconds: number): string {
@@ -111,8 +132,7 @@ export function mapCaptureError(status: number, body: Json): ToolErrorShape {
   const upstream = str(body.error) ?? "";
   // A "not found" never forwards the upstream body: the answer for a missing snip and for one the
   // caller may not see must be byte-identical (guarantee G4).
-  if (upstream === "CAPTURE_NOT_FOUND") return { code: "CAPTURE_NOT_FOUND", message: NO_READY_CAPTURE_MESSAGE, retryable: false, detail: {} };
-  if (status === 404 || upstream === "not_found") return { code: "CAPTURE_NOT_FOUND", message: CAPTURE_NOT_FOUND_MESSAGE, retryable: false, detail: {} };
+  if (status === 404 || upstream === "CAPTURE_NOT_FOUND" || upstream === "not_found") return { code: "CAPTURE_NOT_FOUND", message: CAPTURE_NOT_FOUND_MESSAGE, retryable: false, detail: {} };
   if (upstream === "CAPTURE_STALE") return staleError(body);
   if (upstream === "AMBIGUOUS_PROJECT") return ambiguousError(body);
   if (upstream === "CAPTURE_NOT_READY") return captureNotReady();
@@ -128,9 +148,10 @@ export interface CaptureText {
 }
 
 function whoTook(capture: Json): string {
-  const name = str(capture.capturedByName);
-  if (capture.access === "owner") return name ? `you (${name})` : "you";
-  return name ?? "another member";
+  const name = safeName(capture.capturedByName);
+  const quoted = name ? JSON.stringify(name) : undefined;
+  if (capture.access === "owner") return quoted ? `you (${quoted})` : "you";
+  return quoted ?? "another member";
 }
 
 function sizeLine(width: number | undefined, height: number | undefined, bytes: number | undefined): string {
@@ -182,7 +203,7 @@ export function formatCapture(capture: Json, opts: { imageAttached: boolean; ima
       project_id: project ?? null,
       status: str(capture.status) ?? null,
       age_seconds: age ?? null,
-      taken_by: str(capture.capturedByName) ?? null,
+      taken_by: safeName(capture.capturedByName) ?? null,
       is_own: capture.access === "owner",
       taken_at: takenAt ?? null,
       width: width ?? null,
@@ -196,6 +217,11 @@ export function formatCapture(capture: Json, opts: { imageAttached: boolean; ima
   };
 }
 
+const listName = (c: Json): string => {
+  const name = safeName(c.capturedByName);
+  return name ? JSON.stringify(name) : "another member";
+};
+
 function listRow(c: Json, index: number, now: number): string {
   const age = ageSecondsOf(c, now);
   const w = num(c.width);
@@ -207,7 +233,7 @@ function listRow(c: Json, index: number, now: number): string {
     `${index + 1}. ${str(c.captureId) ?? "unknown"}`,
     `project ${str(c.projectId) ?? "?"}`,
     age === undefined ? "age unknown" : humanAge(age),
-    `by ${c.access === "owner" ? "you" : (str(c.capturedByName) ?? "another member")}`,
+    `by ${c.access === "owner" ? "you" : (listName(c))}`,
     `${size}${weight}`,
   ];
   if (c.status === "pending") parts.push("still uploading");
@@ -238,7 +264,7 @@ export function formatList(data: Json, scope: "mine" | "shared", now = Date.now(
       project_id: str(c.projectId) ?? null,
       status: str(c.status) ?? null,
       age_seconds: ageSecondsOf(c, now) ?? null,
-      taken_by: str(c.capturedByName) ?? null,
+      taken_by: safeName(c.capturedByName) ?? null,
       is_own: c.access === "owner",
       width: num(c.width) ?? null,
       height: num(c.height) ?? null,

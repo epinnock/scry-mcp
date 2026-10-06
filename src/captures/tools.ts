@@ -19,7 +19,7 @@ import {
   LIST_DEFAULT_LIMIT,
   LIST_MAX_LIMIT,
 } from "./constants";
-import { captureNotReady, formatCapture, formatList, mapCaptureError } from "./format";
+import { CAPTURE_NOT_FOUND_MESSAGE, captureNotReady, formatCapture, formatList, mapCaptureError } from "./format";
 
 export interface CaptureToolContext {
   /** Null when the dashboard URL or signing secret is not configured. */
@@ -41,7 +41,14 @@ function errorResult(code: string, message: string, retryable: boolean, detail: 
 }
 
 const PROJECT_ID = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
-const CAPTURE_ID = z.string().min(4).max(64).regex(/^[A-Za-z0-9_-]+$/, "A capture id, as printed by Scry (for example cap_7k3f).");
+/**
+ * A capture id is the short `cap_xxxx` display form or the UUID the app mints. Anything else (notably
+ * `latest`, which is a route of its own on the dashboard) is refused here, before any call.
+ */
+const CAPTURE_ID = z.string().min(4).max(64).regex(
+  /^(cap_[A-Za-z0-9_-]{1,60}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
+  "A capture id, as printed by Scry (for example cap_7k3f). For the newest snip call latest_capture instead.",
+);
 
 const ERRORS_DOC = [
   "Errors (JSON {error, message, retryable}): CAPTURE_NOT_FOUND (no such capture that you may see; do not retry),",
@@ -57,6 +64,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
     call: (c: DashboardAgentClient) => Promise<ApiResult>,
     render: (data: Record<string, unknown>) => Promise<ToolResult> | ToolResult,
   ): Promise<ToolResult> {
+    ctx.log(tool, {}); // one MCP_USAGE data point per call: tool, env and uid only (no capture id, no note)
     if (!ctx.checkRateLimit()) return errorResult("RATE_LIMITED", "Too many requests. Please wait a moment and try again.", true);
     if (write && !ctx.writeLimiter.take()) {
       return errorResult("WRITE_RATE_LIMITED", `At most ${CAPTURE_WRITE_RATE_LIMIT_RPM} capture deletes per minute per user. Wait and retry.`, true, { retry_after_seconds: ctx.writeLimiter.retryAfterSeconds() });
@@ -156,7 +164,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
       c => c.captureGet(args.capture_id, { project_id: args.project_id }),
       async data => {
         const capture = data.capture as Record<string, unknown> | undefined;
-        return capture ? captureResult(capture) : errorResult("CAPTURE_NOT_FOUND", "No capture with that id is available to you.", false);
+        return capture ? captureResult(capture) : errorResult("CAPTURE_NOT_FOUND", CAPTURE_NOT_FOUND_MESSAGE, false);
       },
     ),
   );
@@ -247,7 +255,7 @@ export async function fetchAgentImage(url: string | undefined, fetchImpl: typeof
   }
 }
 
-const tooBig = () => `larger than the ${Math.round(CAPTURE_AGENT_IMAGE.inlineMaxBytes / 1024)} KB inline budget`;
+const tooBig = () => `larger than the ${Math.round(CAPTURE_AGENT_IMAGE.inlineMaxBytes / 1000)} KB inline budget`;
 
 function toBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
