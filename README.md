@@ -38,6 +38,7 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
+| `get_more_tools` | Tell Scry what capability you needed that no tool offers (recorded for the team; nothing runs) |
 
 ### Issue resolution tools (stage; `ISSUE_TOOLS_ENABLED="1"`)
 
@@ -105,6 +106,40 @@ API (substitute the staging dataset name for staging):
 SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() - INTERVAL '30' DAY GROUP BY tool
 ```
 
+## Analytics
+
+Feature mcp-analytics. Every tool call produces ONE vendor-neutral event, `mcp_tool_call.v1`
+(`src/analytics/event.ts`), built from an allow-list. The event goes to the sinks named in
+`ANALYTICS_SINKS` (comma-separated; unset = `log`; `none` = nothing; unknown names are ignored).
+
+| Sink | What it does | Where |
+|------|--------------|-------|
+| `log` | One schema-v1 line `msg:"mcp_tool_call"` (route = tool, status, ms, `err_code`, `uid_hash`, `client` = name/version). Joins the `msg:"request"` line by `request_id`. Default. | R2 log store (`scry-logs.py --request-id`) |
+| `posthog` | `$mcp_tool_call`, `$mcp_initialize`, `$mcp_tools_list`, `$mcp_missing_capability` and `$exception` through PostHog's MCP analytics SDK. No-op without the `POSTHOG_PROJECT_TOKEN` secret. | PostHog project 625583 (staging). Production sends nothing until Gate B |
+
+What is collected: tool name, outcome, latency, error code, the confirmed project id, a salted hash of
+the user id (`uid_hash`, never the uid or email), MCP client name/version/protocol, the calling model
+when the client states it (Codex only), argument NAMES, the response SIZE, and a session id (the
+Durable Object id). PostHog also gets the agent's optional `context` sentence, scrubbed of emails, URLs
+and key-shaped strings and capped at 300 characters. Logs never carry it.
+
+What is never collected: argument values, response bodies, image data, queries, raw uid, email, tokens.
+
+Agent-visible changes: every tool accepts two optional arguments, `context` (why the agent is calling
+the tool) and `conversation_id` (groups calls). The wrapper adds them to each tool's schema and removes
+them before the handler runs, so tool code never sees them. The `get_more_tools` tool lets an agent say
+what it needed that Scry does not offer; it records a missing-capability event and does nothing else.
+
+Add or replace a sink: write `src/analytics/sinks/<name>.ts` that implements `AnalyticsSink`
+(`toolCall`, `initialize`, `toolsList`; never throw), add the name to `KNOWN_SINKS` in `sinks.ts` and the
+case in `createSinks` (`index.ts`). To drop PostHog, delete `sinks/posthog.ts`, its case in `index.ts`, and
+the `@posthog/mcp` and `posthog-node` dependencies. ESLint (`no-restricted-imports`) allows PostHog
+imports in that one file only. Sinks are fire-and-forget with a time budget and run under `waitUntil`, so a
+slow or failing sink never changes or delays a tool result.
+
+Kill switch: remove `posthog` from `ANALYTICS_SINKS` (or delete the `POSTHOG_PROJECT_TOKEN` secret);
+logging continues. Runbook: `scry-management/docs/runbooks/mcp-analytics.md`.
+
 ## Request ids and error tracking
 
 Two kinds of id, NOT joined (feature observability-request-id; contract in
@@ -168,6 +203,7 @@ scry-mcp/
 │   ├── mcp.ts                  # MCP server — 5 tools (search, screenshot, generate_image, whoami)
 │   ├── credits.ts / wallet.ts  # AI-credits hold/settle against the diff-service ledger
 │   ├── captures/               # snip-capture tools (constants, format, tools)
+│   ├── analytics/              # vendor-neutral tool-call events + sinks (log, posthog)
 │   ├── llm-gateway.ts          # Cloudflare AI Gateway routing for Gemini
 │   ├── telemetry/              # Langfuse spans -> TELEMETRY_QUEUE producer
 │   └── utils/
