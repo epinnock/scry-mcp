@@ -27,10 +27,9 @@ interface AttrSource {
   client_name?: string;
   client_version?: string;
   protocol_version?: string;
-  server_build?: string;
 }
 
-/** The `mcp.*` attributes every event shares. Names and versions are slugged so they are single tokens; undefined values are omitted. */
+/** The `mcp.*` attributes every event shares. The build is not one of them: it rides in the top-level `version` (SCRY_COMMIT), and a 40-hex sha is secret-shaped to the attrs scrubber (F15). Names and versions are slugged so they are single tokens; undefined values are omitted. */
 function sharedAttrs(e: AttrSource): LogAttrs {
   const a: Record<string, string | number | boolean | string[] | undefined> = {
     "mcp.session_id": e.session_id,
@@ -38,7 +37,6 @@ function sharedAttrs(e: AttrSource): LogAttrs {
     "mcp.client_name": slug(e.client_name, 64),
     "mcp.client_version": slug(e.client_version, 32),
     "mcp.protocol_version": slug(e.protocol_version, 16),
-    "mcp.server_build": slug(e.server_build, 64),
   };
   return compact(a);
 }
