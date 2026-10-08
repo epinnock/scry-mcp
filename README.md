@@ -38,7 +38,7 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
-| `get_more_tools` | Tell Scry what capability you needed that no tool offers (recorded for the team; nothing runs). Only with `ANALYTICS_AGENT_ARGS="on"` (staging) |
+| `get_more_tools` | Tell Scry what capability you needed that no tool offers (recorded for the team; nothing runs). Only with `ANALYTICS_AGENT_ARGS="on"` (staging and production) |
 
 ### Issue resolution tools (stage; `ISSUE_TOOLS_ENABLED="1"`)
 
@@ -131,8 +131,8 @@ Client labels (client name/version, protocol version, model) are sent only when 
 else is reported as `other`, in the logs and in PostHog alike. The intent is cut to 1000 characters, scrubbed
 (emails, URLs, phone numbers, IPv4/IPv6, keys and long ids), cut to 300 and scrubbed again.
 
-Agent-visible changes, only when `ANALYTICS_AGENT_ARGS="on"` (set in `env.staging.vars` only; off or absent in
-production, where events still flow but no tool changes): every tool accepts two optional arguments, `context` (why the agent is calling
+Agent-visible changes, only when `ANALYTICS_AGENT_ARGS="on"` (on in production and staging since
+2026-10-08; absent or any other value = off, where events still flow but no tool changes): every tool accepts two optional arguments, `context` (why the agent is calling
 the tool) and `conversation_id` (groups calls). The wrapper adds them to each tool's schema and removes
 them before the handler runs, so tool code never sees them. A value that is not a string, or is longer than 4096
 characters, is dropped from analytics and the call proceeds normally. A tool that declares its own `context` or

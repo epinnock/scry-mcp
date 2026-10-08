@@ -992,7 +992,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       onError: sink => this.analyticsFailed(sink),
       warn: (msg, code) => this.analyticsWarn(msg, code),
     });
-    // ANALYTICS_AGENT_ARGS="on" (staging only) is what makes analytics visible to agents; off, events still flow.
+    // ANALYTICS_AGENT_ARGS="on" (production and staging since 2026-10-08) is what makes analytics visible to agents; off, events still flow.
     const agentArgs = agentArgsEnabled(this.env);
     instrumentToolRegistration(this.server, {
       logger: getLogger(this.env),
@@ -1643,7 +1643,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
 
     // --- get_more_tools: lets an agent say what it needed that Scry's tools do not offer (feature mcp-analytics) ---
-    // Registered only with ANALYTICS_AGENT_ARGS="on" (staging): it is agent-visible. The event it produces
+    // Registered only with ANALYTICS_AGENT_ARGS="on": it is agent-visible. The event it produces
     // (missing_capability) reaches whichever sinks are configured.
     if (agentArgs) {
       this.server.registerTool(

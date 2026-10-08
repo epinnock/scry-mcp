@@ -6,9 +6,11 @@
   "vars": {
     "SCRY_ENV": "production",
     // mcp-analytics (Gate B 2026-10-08): tool-call events go to the standard logs and to PostHog prod project 625582
-    // (secret POSTHOG_PROJECT_TOKEN; sends nothing without it). Kill switch: set this to "log". The agent-args flag
-    // stays absent here (off): agents see no new arguments or tools in production yet.
+    // (secret POSTHOG_PROJECT_TOKEN; sends nothing without it). Kill switch: set this to "log".
     "ANALYTICS_SINKS": "log,posthog",
+    // mcp-analytics F22 (founder 2026-10-08): "on" adds the optional context / conversation_id arguments to every
+    // tool and the get_more_tools tool, which agents can see. Turn off by removing it (or any value but "on").
+    "ANALYTICS_AGENT_ARGS": "on",
     // log-standardization: SCRY_LOG_SALT is a SECRET, not a var (wrangler secret put SCRY_LOG_SALT, and
     // --env staging). uid_hash in the request line uses it; unset in staging/production = uid_hash omitted.
     // AI credits: ENFORCE in production (2026-09-24, founder skipped the shadow week;
@@ -82,8 +84,7 @@
         // mcp-analytics: tool-call events go to the standard logs and to PostHog (stage project 625583; secret
         // POSTHOG_PROJECT_TOKEN).
         "ANALYTICS_SINKS": "log,posthog",
-        // mcp-analytics: staging only. "on" adds the optional context / conversation_id arguments to every tool and the
-        // get_more_tools tool, which agents can see. Production has no such var (off): events flow, the tools do not change.
+        // mcp-analytics: same as production (context / conversation_id arguments + get_more_tools).
         "ANALYTICS_AGENT_ARGS": "on",
         // llm-telemetry PR 7. Gemini calls go through the scry-stage AI Gateway
         // (needs the CF_AIG_TOKEN secret). Delete this line to call Google directly.
