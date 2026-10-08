@@ -28,9 +28,21 @@ export interface PostHogSinkOptions {
   fetch?: PostHogMCPOptions["fetch"];
   /** Per-request HTTP timeout. Default 1500 ms. */
   requestTimeoutMs?: number;
+  /** Loads the SDK module. Tests replace it to make the load fail. */
+  loadSdk?: typeof loadSdk;
+  /** Clock for the retry backoff. Tests only. */
+  now?: () => number;
+  /** Called once per failed load (the sink retries after RETRY_BACKOFF_MS). The caller logs one warning line. */
+  onLoadError?: () => void;
 }
 
 type Client = PostHogMCP;
+
+/** The only dynamic import of the SDK; lazy so a deploy without the token never evaluates it. */
+export const loadSdk = () => import("@posthog/mcp");
+
+/** After a failed load the sink does not try again for this long (and sends nothing meanwhile). */
+export const RETRY_BACKOFF_MS = 60_000;
 
 /** Let queued microtasks (the SDK's async event pipeline) finish before flushing. */
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
@@ -39,34 +51,58 @@ export function createPostHogSink(opts: PostHogSinkOptions): AnalyticsSink | nul
   const token = opts.token?.trim();
   if (!token) return null;
 
-  let client: Promise<Client | null> | undefined;
-  const load = async (): Promise<Client | null> => {
-    try {
-      const { PostHogMCP: Ctor } = await import("@posthog/mcp");
-      return new Ctor(token, {
-        host: opts.host || DEFAULT_POSTHOG_HOST,
-        flushAt: 1,
-        flushInterval: 0,
-        fetchRetryCount: 0,
-        requestTimeout: opts.requestTimeoutMs ?? 1500,
-        disableCompression: true,
-        disableGeoip: true,
-        preloadFeatureFlags: false,
-        disableRemoteConfig: true,
-        captureModel: false,
-        enableConversationId: false,
-        serverBuild: opts.serverBuild,
-        ...(opts.fetch ? { fetch: opts.fetch } : {}),
-      });
-    } catch {
-      return null;
-    }
+  const now = opts.now ?? Date.now;
+  const sdk = opts.loadSdk ?? loadSdk;
+  let client: Client | null = null;
+  let loading: Promise<Client | null> | undefined;
+  let retryAt = 0;
+
+  const create = async (): Promise<Client> => {
+    const { PostHogMCP: Ctor } = await sdk();
+    return new Ctor(token, {
+      host: opts.host || DEFAULT_POSTHOG_HOST,
+      flushAt: 1,
+      flushInterval: 0,
+      fetchRetryCount: 0,
+      requestTimeout: opts.requestTimeoutMs ?? 1500,
+      disableCompression: true,
+      disableGeoip: true,
+      preloadFeatureFlags: false,
+      disableRemoteConfig: true,
+      captureModel: false,
+      enableConversationId: false,
+      serverBuild: opts.serverBuild,
+      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    });
   };
+
+  /** The loaded client, or null while the sink is backing off after a failed load (F5: a failure is never cached for good). */
+  async function getClient(): Promise<Client | null> {
+    if (client) return client;
+    if (now() < retryAt) return null;
+    loading ??= create().then(
+      c => {
+        client = c;
+        loading = undefined;
+        return c;
+      },
+      () => {
+        retryAt = now() + RETRY_BACKOFF_MS;
+        loading = undefined;
+        try {
+          opts.onLoadError?.();
+        } catch {
+          // The warning is a diagnostic only.
+        }
+        return null;
+      },
+    );
+    return loading;
+  }
 
   async function send(capture: (c: Client) => void): Promise<void> {
     try {
-      client ??= load();
-      const c = await client;
+      const c = await getClient();
       if (!c) return;
       capture(c);
       await tick();

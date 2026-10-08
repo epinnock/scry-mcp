@@ -60,6 +60,8 @@ declare namespace Cloudflare {
     CREDITS_PAGE_URL?: string;
     /** Analytics sinks (feature mcp-analytics): csv of "log" | "posthog"; unset = "log". Production has no "posthog" until Gate B. */
     ANALYTICS_SINKS?: string;
+    /** "on" = add `context` / `conversation_id` to every tool and register `get_more_tools` (feature mcp-analytics). Unset/off in production. */
+    ANALYTICS_AGENT_ARGS?: string;
     /** PostHog project token (secret, per environment). Without it the posthog sink is absent. */
     POSTHOG_PROJECT_TOKEN?: string;
     /** PostHog ingest host (default https://us.i.posthog.com). */

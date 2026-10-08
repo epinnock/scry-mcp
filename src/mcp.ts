@@ -51,7 +51,7 @@ import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type Resol
 import { mintRequestId } from "./lib/request-id";
 import { errCodeOf, getLogger, hashUid, msgWords, type LogEnv } from "./lib/log";
 import { confirmProjectAccess, currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
-import { createAnalyticsFromEnv, buildInitializeEvent, buildToolsListEvent, MISSING_CAPABILITY_TOOL, type Analytics, type SessionInfo } from "./analytics";
+import { agentArgsEnabled, createAnalyticsFromEnv, buildInitializeEvent, buildToolsListEvent, MISSING_CAPABILITY_TOOL, type Analytics, type SessionInfo } from "./analytics";
 import { onToolsListed } from "./analytics/hooks";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
@@ -176,6 +176,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     if (now - (this.analyticsWarnAt.get(sink) ?? 0) < 60_000) return;
     this.analyticsWarnAt.set(sink, now);
     getLogger(this.env).warn("analytics sink failed", { err_code: errCodeOf(`analytics_${sink}`, "analytics_sink") });
+  }
+
+  /** A config or start-up problem in analytics: one schema-v1 warning line, fixed words and err_code (never a value). */
+  private analyticsWarn(msg: string, errCode: string): void {
+    getLogger(this.env).warn(msg, { err_code: errCode });
   }
 
   private emitSessionEvent(build: (uidHash: string | undefined, session: SessionInfo) => Parameters<Analytics["emit"]>[0]): void {
@@ -985,11 +990,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       logger: () => getLogger(this.env),
       waitUntil: p => this.ctx.waitUntil(p),
       onError: sink => this.analyticsFailed(sink),
+      warn: (msg, code) => this.analyticsWarn(msg, code),
     });
+    // ANALYTICS_AGENT_ARGS="on" (staging only) is what makes analytics visible to agents; off, events still flow.
+    const agentArgs = agentArgsEnabled(this.env);
     instrumentToolRegistration(this.server, {
       logger: getLogger(this.env),
       identify: () => ({ uid: this.props?.firebaseUid, salt: (this.env as LogEnv).SCRY_LOG_SALT, env: this.env.SCRY_ENV }),
       analytics: this.analytics,
+      injectArgs: agentArgs,
       session: () => this.sessionInfo(),
       serverBuild: this.env.SCRY_COMMIT,
     });
@@ -1634,28 +1643,30 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     }
 
     // --- get_more_tools: lets an agent say what it needed that Scry's tools do not offer (feature mcp-analytics) ---
-    // Always registered. The event it produces (missing_capability) reaches whichever sinks are configured;
-    // with none beyond the log it is still counted by the log line's route.
-    this.server.registerTool(
-      MISSING_CAPABILITY_TOOL,
-      {
-        description:
-          "Call this when your task needs a capability the Scry tools do not offer, or when you could not find a tool that fits. " +
-          "Describe the goal and the kind of tool that would help. Nothing runs and no data is read; the request is recorded so the Scry team can build it.",
-        inputSchema: {
-          context: z.string().describe("A short description of your goal and what kind of Scry tool would help accomplish it. Do not include names, emails, URLs or keys."),
-        },
-        annotations: { title: "Request a missing capability", readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
-      },
-      async () => ({
-        content: [
-          {
-            type: "text" as const,
-            text: "Noted. Scry does not have a tool for this yet, and your request has been recorded for the team. Continue with the existing Scry tools if any of them gets you part of the way.",
+    // Registered only with ANALYTICS_AGENT_ARGS="on" (staging): it is agent-visible. The event it produces
+    // (missing_capability) reaches whichever sinks are configured.
+    if (agentArgs) {
+      this.server.registerTool(
+        MISSING_CAPABILITY_TOOL,
+        {
+          description:
+            "Call this when your task needs a capability the Scry tools do not offer, or when you could not find a tool that fits. " +
+            "Describe the goal and the kind of tool that would help. Nothing runs and no data is read; the request is recorded so the Scry team can build it.",
+          inputSchema: {
+            context: z.string().describe("A short description of your goal and what kind of Scry tool would help accomplish it. Do not include names, emails, URLs or keys."),
           },
-        ],
-      }),
-    );
+          annotations: { title: "Request a missing capability", readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+        },
+        async () => ({
+          content: [
+            {
+              type: "text" as const,
+              text: "Noted. Scry does not have a tool for this yet, and your request has been recorded for the team. Continue with the existing Scry tools if any of them gets you part of the way.",
+            },
+          ],
+        }),
+      );
+    }
 
     // --- whoami: authenticated user info ---
     this.server.tool(

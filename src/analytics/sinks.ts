@@ -18,13 +18,14 @@ export const KNOWN_SINKS = ["log", "posthog"] as const;
 export type SinkName = (typeof KNOWN_SINKS)[number];
 
 /**
- * `ANALYTICS_SINKS`: comma-separated sink names. Unset or empty = "log". "none" / "off" = no sink. Unknown
- * names are ignored (returned in `unknown` so the caller can warn), so a typo can never enable something.
+ * `ANALYTICS_SINKS`: comma-separated sink names. The `log` sink is ALWAYS on, whatever the value says (the data must
+ * always land in the logs), so unset, empty, "none" and "off" all give just `log`, and `posthog` alone gives
+ * `log,posthog`. Unknown names are ignored (returned in `unknown` so the caller can warn), so a typo can never
+ * enable something.
  */
 export function parseSinks(value: string | undefined): { names: SinkName[]; unknown: string[] } {
   const raw = (value ?? "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-  if (raw.length === 0) return { names: ["log"], unknown: [] };
-  const names: SinkName[] = [];
+  const names: SinkName[] = ["log"];
   const unknown: string[] = [];
   for (const r of raw) {
     if (r === "none" || r === "off") continue;

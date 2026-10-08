@@ -15,6 +15,18 @@ export const CONVERSATION_DESCRIPTION =
   "Optional. An identifier you choose for the current conversation (any short string, for example a UUID). " +
   "Pass the same value on every Scry tool call in this conversation so related calls can be grouped. For analytics only.";
 
+/** The longest `context` / `conversation_id` the wrapper accepts. Longer (or not a string) is dropped, never an error. */
+export const MAX_ARG_CHARS = 4096;
+
+/**
+ * A lenient optional string: anything that is not a string of at most MAX_ARG_CHARS becomes `undefined` instead of
+ * failing validation (review F2: clients send null or numbers for optional arguments, and analytics must never break
+ * a call). tools/list still advertises an optional string with the description.
+ */
+function lenientString(description: string): z.ZodTypeAny {
+  return z.preprocess(v => (typeof v === "string" && v.length <= MAX_ARG_CHARS ? v : undefined), z.string().optional()).describe(description);
+}
+
 /** What the wrapper knows about one registered tool's arguments. */
 export interface ArgMeta {
   /** Argument names the tool declared itself (before injection); undefined when the schema kind is not understood. */
@@ -52,11 +64,11 @@ function extra(declared: ReadonlySet<string>): { shape: Shape; injected: Set<str
   const shape: Shape = {};
   const injected = new Set<string>();
   if (!declared.has(CONTEXT_ARG)) {
-    shape[CONTEXT_ARG] = z.string().optional().describe(CONTEXT_DESCRIPTION);
+    shape[CONTEXT_ARG] = lenientString(CONTEXT_DESCRIPTION);
     injected.add(CONTEXT_ARG);
   }
   if (!declared.has(CONVERSATION_ARG)) {
-    shape[CONVERSATION_ARG] = z.string().optional().describe(CONVERSATION_DESCRIPTION);
+    shape[CONVERSATION_ARG] = lenientString(CONVERSATION_DESCRIPTION);
     injected.add(CONVERSATION_ARG);
   }
   return { shape, injected };

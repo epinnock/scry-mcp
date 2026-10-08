@@ -172,6 +172,11 @@ export interface ToolWrapOptions {
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
   /** Vendor-neutral analytics (feature mcp-analytics). Absent = no event and no argument injection. */
   analytics?: Analytics;
+  /**
+   * Add the optional `context` / `conversation_id` arguments to every tool (ANALYTICS_AGENT_ARGS="on"). Default
+   * false: events are still emitted, but the tools' schemas are untouched and no intent or conversation is read.
+   */
+  injectArgs?: boolean;
   /** MCP session and client facts held by the Durable Object (client name/version, protocol, session id). */
   session?: () => SessionInfo | Promise<SessionInfo>;
   /** Immutable build id (SCRY_COMMIT) for the event. */
@@ -248,10 +253,12 @@ function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: Call
   if (!analytics) return;
   const raw = (f.rawArgs && typeof f.rawArgs === "object" ? f.rawArgs : {}) as Record<string, unknown>;
   // Sizes and names only, computed now so the result object is read before anything else can touch it.
-  const inputKeys = presentInputKeys(raw, meta?.declared);
+  const inputKeys = presentInputKeys(raw, meta?.declared, meta?.injected);
   const bytes = responseBytes(f.result);
-  const context = meta ? raw[CONTEXT_ARG] : undefined;
-  const conversationId = meta ? raw[CONVERSATION_ARG] : undefined;
+  // F3: only an argument the wrapper added (or get_more_tools' own `context`, which exists to be the intent) is read
+  // as analytics input. A tool's own `context` / `conversation_id` argument is its data, never an intent.
+  const context = meta && (meta.injected.has(CONTEXT_ARG) || f.tool === MISSING_CAPABILITY_TOOL) ? raw[CONTEXT_ARG] : undefined;
+  const conversationId = meta?.injected.has(CONVERSATION_ARG) ? raw[CONVERSATION_ARG] : undefined;
   const model = modelFromMeta(f.extra);
   void (async () => {
     const [uid_hash, session] = await Promise.all([uidHash, Promise.resolve(opts.session?.()).catch(() => undefined)]);
@@ -337,7 +344,7 @@ type Registrar = { registerTool: AnyHandler; tool: AnyHandler };
 
 /** Wrap `handler` (and inject the analytics arguments into `schema`) when analytics is on. */
 function prepare(name: string, schema: unknown, handler: AnyHandler, opts: ToolWrapOptions): { schema: unknown; handler: (...a: unknown[]) => Promise<unknown>; changed: boolean } {
-  if (!opts.analytics) return { schema, handler: wrapToolHandler(name, handler, opts), changed: false };
+  if (!opts.analytics || !opts.injectArgs) return { schema, handler: wrapToolHandler(name, handler, opts), changed: false };
   const prep = prepareSchema(schema);
   const inner: AnyHandler = prep.meta.adaptNoSchema ? (_args: unknown, extra: unknown) => handler(extra) : handler;
   return { schema: prep.schema, handler: wrapToolHandler(name, inner, opts, prep.meta), changed: prep.changed };

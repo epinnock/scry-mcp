@@ -9,6 +9,8 @@
  * No file in this folder except `sinks/posthog.ts` knows about a vendor.
  */
 
+import { scrubString } from "../lib/scry-log";
+
 export const TOOL_CALL_SCHEMA = "mcp_tool_call.v1" as const;
 export const INITIALIZE_SCHEMA = "mcp_initialize.v1" as const;
 export const TOOLS_LIST_SCHEMA = "mcp_tools_list.v1" as const;
@@ -20,6 +22,8 @@ export const CONVERSATION_ARG = "conversation_id";
 export const MISSING_CAPABILITY_TOOL = "get_more_tools";
 
 export const MAX_INTENT = 300;
+/** The raw intent is cut to this many characters BEFORE any pattern runs (bounds the scrubber's work, G3). */
+export const MAX_INTENT_RAW = 1000;
 const MAX_ID = 128;
 const MAX_LABEL = 64;
 const MAX_KEYS = 50;
@@ -91,36 +95,98 @@ export function safeId(value: unknown, max = MAX_ID): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= max && SAFE_ID.test(value) ? value : undefined;
 }
 
-/** A short human label (client name, model id): printable ASCII only, whitespace collapsed, capped. */
+/** The label shape allowed to leave the server (client name/version, protocol, model): a short safe token. */
+const LABEL_SHAPE = /^[A-Za-z0-9._\-\/ ()+]{1,64}$/;
+/** What a present but unsafe label is reported as. */
+export const OTHER_LABEL = "other";
+
+/**
+ * A client-controlled label (client name/version, protocol version, model id). Absent or empty is `undefined`;
+ * a value that is not a safe token (shape above, within `max`, and unchanged by the logger's `scrubString`) is
+ * reported as "other" and never sent in part, so a hostile name can carry no secret and no unbounded cardinality.
+ * The event builders use this, so the log attrs and PostHog get the same value.
+ */
 export function cleanLabel(value: unknown, max = MAX_LABEL): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const s = value.replace(/[^\x20-\x7E]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
-  return s.length > 0 ? s : undefined;
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") return OTHER_LABEL;
+  return value.length <= max && LABEL_SHAPE.test(value) && scrubString(value) === value ? value : OTHER_LABEL;
 }
 
 // --- Intent scrubber -------------------------------------------------------------------------------
 
 const REDACTED = "[redacted]";
-// Order matters: URLs first (they contain token-shaped parts), then secrets, then long ids.
-const SCRUB_RULES: ReadonlyArray<RegExp> = [
-  /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s<>"')]+/gi, // URLs
+const WORD = "A-Za-z0-9_";
+/** Characters of a "token-like" run. */
+const RUN = "A-Za-z0-9_+/=.-";
+const HEX_GROUP = "[0-9A-Fa-f]{1,4}";
+/** One decimal IPv4 octet, 0-255. */
+const OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+/** The separator allowed inside a phone number: one space, dot or hyphen. */
+const SEP = "[ .-]";
+
+/**
+ * Every pattern below is linear-time (feature mcp-analytics, review F1): no unbounded quantifier is nested or
+ * re-tried from every start position. Where a pattern must look at a whole run of characters it can only START
+ * at the beginning of that run (a lookbehind), or its quantifiers are bounded.
+ * Order matters: URLs first (they contain token-shaped parts), then secrets, then long ids.
+ */
+export const CORE_RULES: ReadonlyArray<RegExp> = [
+  // URLs. The scheme part is at most 32 characters, so each start position costs O(32).
+  /(?:[a-z][a-z0-9+.-]{0,31}:\/\/|\bwww\.)[^\s<>"')]+/gi,
   /\bBearer\s+[A-Z0-9._~+/=-]+/gi, // auth headers
   /\beyJ[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]+){0,2}/g, // JWTs
   /\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|glpat|xox[abprs]|phc|phx|AIza|AKIA|ya29|scry)[-_A-Za-z0-9.]{6,}/g, // known key prefixes
   /\b[A-Fa-f0-9]{16,}\b/g, // hex ids and hashes
-  /\b(?=[A-Za-z0-9_+/=.-]*\d)(?=[A-Za-z0-9_+/=.-]*[A-Za-z])[A-Za-z0-9_+/=.-]{20,}/g, // mixed letters+digits, 20+ chars
+  // Mixed letters + digits, 20+ chars. Starts only at the beginning of a run (lookbehind); the run's first word
+  // character is where the old `\b` start fell, so the match is the same, but the two lookaheads now run once per run.
+  new RegExp(`(?<![${RUN}])(?<keep>[+/=.-]*)(?=[${WORD}])(?=[${RUN}]*\\d)(?=[${RUN}]*[A-Za-z])[${RUN}]{20,}`, "g"),
   /\b[A-Za-z0-9_+/=-]{32,}\b/g, // any 32+ char run
 ];
 
-/** Strip emails, URLs, token/key-shaped strings; collapse whitespace; cap at 300 chars. */
-export function scrubIntent(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  let s = value.replace(/[\u0000-\u001F\u007F]/g, " ");
+/** Phone numbers and IP addresses (added in fix round 1). Bounded, start-anchored, linear. */
+export const PII_RULES: ReadonlyArray<RegExp> = [
+  // E.164 and international: + country code then digits with common separators, 8 to 15 digits in all.
+  /(?<![\w.+])\+\d(?:[ .()-]?\d){7,14}(?!\d)/g,
+  // US / NANP: optional 1 or +1, area code in () or bare, then 3-4 digits with one optional . - or space between.
+  new RegExp(`(?<![\\w.+-])(?:\\+?1${SEP}?)?(?:\\(\\d{3}\\)${SEP}?|\\d{3}${SEP})\\d{3}${SEP}\\d{4}(?![\\d-])`, "g"),
+  /(?<![\w.+-])\d{10}(?![\d.-])/g, // ten bare digits
+  // IPv4: four decimal octets 0-255 (a version such as 1.2.3 or a date has fewer or longer parts).
+  new RegExp(`(?<![\\w.])(?:${OCTET}\\.){3}${OCTET}(?!\\w|\\.\\d)`, "g"),
+  // IPv6: eight groups, or a "::" compressed form. A clock time such as 12:00:00 has neither.
+  new RegExp(
+    `(?<![\\w:.])(?:(?:${HEX_GROUP}:){7}${HEX_GROUP}|(?:${HEX_GROUP}(?::${HEX_GROUP}){0,6})?::(?:${HEX_GROUP}(?::${HEX_GROUP}){0,6})?)(?![\\w:])`,
+    "g",
+  ),
+];
+
+const SCRUB_RULES: ReadonlyArray<RegExp> = [...CORE_RULES, ...PII_RULES];
+
+/** Replacement: the whole match, except a leading `keep` group (punctuation before the first word character) stays. */
+function redact(...args: unknown[]): string {
+  const groups = args[args.length - 1];
+  const keep = typeof groups === "object" && groups !== null ? (groups as { keep?: string }).keep : undefined;
+  return `${keep ?? ""}${REDACTED}`;
+}
+
+/** One scrub pass over `text` (already length-bounded by the caller): control characters, emails, patterns, whitespace. */
+export function scrubPass(text: string, rules: ReadonlyArray<RegExp> = SCRUB_RULES, probe?: (inputLength: number) => void): string {
+  probe?.(text.length);
+  let s = text.replace(/[\u0000-\u001F\u007F]/g, " ");
   // Emails: any whitespace-delimited word with an @ in its middle (no regex backtracking).
   s = s.split(/\s+/).map(w => (w.indexOf("@") > 0 && w.indexOf("@") < w.length - 1 ? REDACTED : w)).join(" ");
-  for (const rule of SCRUB_RULES) s = s.replace(rule, REDACTED);
-  s = s.replace(/\s+/g, " ").trim();
-  if (s.length > MAX_INTENT) s = s.slice(0, MAX_INTENT).trimEnd();
+  for (const rule of rules) s = s.replace(rule, redact);
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Strip emails, URLs, phone numbers, IPs and token/key-shaped strings; collapse whitespace; cap at 300 chars.
+ * Pipeline: cut the raw value to 1000 chars, scrub, cut to 300, scrub again (a secret split by the 300 boundary
+ * is redacted by the second pass). `probe` receives the length of each pass's input (tests: never above 1000).
+ */
+export function scrubIntent(value: unknown, probe?: (inputLength: number) => void): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let s = scrubPass(value.length > MAX_INTENT_RAW ? value.slice(0, MAX_INTENT_RAW) : value, SCRUB_RULES, probe);
+  if (s.length > MAX_INTENT) s = scrubPass(s.slice(0, MAX_INTENT), SCRUB_RULES, probe);
   return s.length > 0 ? s : undefined;
 }
 
@@ -164,12 +230,15 @@ export function responseBytes(result: unknown): number {
   }
 }
 
-/** Declared argument names that are present in `args` (never values), minus the injected analytics args. */
-export function presentInputKeys(args: unknown, declared: ReadonlySet<string> | undefined): string[] {
+/**
+ * Declared argument names that are present in `args` (never values), minus the analytics args the wrapper injected.
+ * A tool's own `context` / `conversation_id` is a normal argument and its name is listed (F3).
+ */
+export function presentInputKeys(args: unknown, declared: ReadonlySet<string> | undefined, injected?: ReadonlySet<string>): string[] {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const keys: string[] = [];
   for (const k of Object.keys(args)) {
-    if (k === CONTEXT_ARG || k === CONVERSATION_ARG) continue;
+    if (injected?.has(k)) continue;
     if (declared && !declared.has(k)) continue;
     const safe = safeId(k, MAX_LABEL);
     if (safe && (args as Record<string, unknown>)[k] !== undefined) keys.push(safe);

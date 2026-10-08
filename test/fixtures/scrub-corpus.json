@@ -1,0 +1,160 @@
+[
+ {
+  "input": "mail bob@corp.io now",
+  "expected": "mail [redacted] now"
+ },
+ {
+  "input": "bob@corp.io.",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "(bob@corp.io)",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "bob [at] corp.io",
+  "expected": "bob [at] corp.io"
+ },
+ {
+  "input": "first.last+tag@sub.corp.co.uk",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "https://app.scrymore.com/p/abc?token=xyz",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "app.scrymore.com/project/abcd",
+  "expected": "app.[redacted]/project/abcd"
+ },
+ {
+  "input": "dashboard.scrymore.com",
+  "expected": "dashboard.[redacted]"
+ },
+ {
+  "input": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.sig",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "eyJhbGciOiJIUzI1NiJ9",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "Bearer abc.def.ghi",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "phc_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "phx_abcdef123456",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "sk-ant-api03-abcdefghijklmnop",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "sk-proj-abc123def456",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "AIzaSyA1234567890abcdefghijklmnopqrstuv",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "AKIAIOSFODNN7EXAMPLE",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "0123456789abcdef0123",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "a1b2c3d4e5f6a1b2",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "550e8400-e29b-41d4-a716-446655440000",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "Zt8Vj2KxQp9LmN3rW5yB7dFhA1sE",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "firebaseuid abcdefghijklmnopqrstuvwxyzab",
+  "expected": "firebaseuid abcdefghijklmnopqrstuvwxyzab"
+ },
+ {
+  "input": "uid:Zt8Vj2KxQp9LmN3rW5yB7dFhA1sE",
+  "expected": "uid:[redacted]"
+ },
+ {
+  "input": "api_key=sk-abcdef123456",
+  "expected": "api_key=[redacted]"
+ },
+ {
+  "input": "key_sk-abcdef123456",
+  "expected": "key_sk-abcdef123456"
+ },
+ {
+  "input": "xoxb-123456789012-abcdefghijkl",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "password hunter2hunter2hunter2",
+  "expected": "password [redacted]"
+ },
+ {
+  "input": "call me 210-555-0199",
+  "expected": "call me [redacted]",
+  "before": "call me 210-555-0199"
+ },
+ {
+  "input": "192.168.0.152",
+  "expected": "[redacted]",
+  "before": "192.168.0.152"
+ },
+ {
+  "input": "alice.smith",
+  "expected": "alice.smith"
+ },
+ {
+  "input": "user=bob@corp.io;",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "bob@corp.io,carol@x.org",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "BOB＠corp.io",
+  "expected": "BOB＠corp.io"
+ },
+ {
+  "input": "bob%40corp.io",
+  "expected": "bob%40corp.io"
+ },
+ {
+  "input": "bob at corp dot io",
+  "expected": "bob at corp dot io"
+ },
+ {
+  "input": "project 7f3a9c2e-1b4d-4e8f-9a6c-2d5b8e1f4a7c",
+  "expected": "project [redacted]"
+ },
+ {
+  "input": "1234567890123456789012345",
+  "expected": "[redacted]"
+ },
+ {
+  "input": "abcdefghijklmnopqrstuvwxy",
+  "expected": "abcdefghijklmnopqrstuvwxy"
+ }
+]

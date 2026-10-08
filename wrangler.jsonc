@@ -74,6 +74,9 @@
         // mcp-analytics: tool-call events go to the standard logs and to PostHog (stage project 625583; secret
         // POSTHOG_PROJECT_TOKEN). Production deliberately has no ANALYTICS_SINKS (default "log" only) until Gate B.
         "ANALYTICS_SINKS": "log,posthog",
+        // mcp-analytics: staging only. "on" adds the optional context / conversation_id arguments to every tool and the
+        // get_more_tools tool, which agents can see. Production has no such var (off): events flow, the tools do not change.
+        "ANALYTICS_AGENT_ARGS": "on",
         // llm-telemetry PR 7. Gemini calls go through the scry-stage AI Gateway
         // (needs the CF_AIG_TOKEN secret). Delete this line to call Google directly.
         "LLM_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f54b9c10de9d140756dbf449aa124f1e/scry-stage",

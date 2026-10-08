@@ -38,7 +38,7 @@ The Worker acts as both an **OAuth server** to MCP clients (issuing its own toke
 | `get_component_screenshot` | Fetch a component screenshot (returns image block + presigned URL) |
 | `generate_image` | Gemini image generation (fast / quality), billed in AI credits; routed through Cloudflare AI Gateway when `LLM_GATEWAY_URL` is set |
 | `whoami` | Returns the authenticated user's info |
-| `get_more_tools` | Tell Scry what capability you needed that no tool offers (recorded for the team; nothing runs) |
+| `get_more_tools` | Tell Scry what capability you needed that no tool offers (recorded for the team; nothing runs). Only with `ANALYTICS_AGENT_ARGS="on"` (staging) |
 
 ### Issue resolution tools (stage; `ISSUE_TOOLS_ENABLED="1"`)
 
@@ -110,12 +110,13 @@ SELECT blob1 AS tool, count() AS n FROM scry_mcp_usage WHERE timestamp > NOW() -
 
 Feature mcp-analytics. Every tool call produces ONE vendor-neutral event, `mcp_tool_call.v1`
 (`src/analytics/event.ts`), built from an allow-list. The event goes to the sinks named in
-`ANALYTICS_SINKS` (comma-separated; unset = `log`; `none` = nothing; unknown names are ignored).
+`ANALYTICS_SINKS` (comma-separated). The `log` sink is always on, whatever the value says (`none`, `off` and unset all
+mean `log` only), so keep it listed; an unknown name is ignored and logs one warning line.
 
 | Sink | What it does | Where |
 |------|--------------|-------|
 | `log` | One schema-v1 line `msg:"mcp_tool_call"` (route = tool, status, ms, `err_code`, `uid_hash`, `client` = name/version). Joins the `msg:"request"` line by `request_id`. Default. | R2 log store (`scry-logs.py --request-id`) |
-| `posthog` | `$mcp_tool_call`, `$mcp_initialize`, `$mcp_tools_list`, `$mcp_missing_capability` and `$exception` through PostHog's MCP analytics SDK. No-op without the `POSTHOG_PROJECT_TOKEN` secret. | PostHog project 625583 (staging). Production sends nothing until Gate B |
+| `posthog` | `$mcp_tool_call`, `$mcp_initialize`, `$mcp_tools_list`, `$mcp_missing_capability` and `$exception` through PostHog's MCP analytics SDK. No-op without the `POSTHOG_PROJECT_TOKEN` secret, and it refuses to start (one warning line) without the `SCRY_LOG_SALT` secret, because every event would be anonymous. A failed SDK load is retried after 60 s, one warning line per failure. | PostHog project 625583 (staging). Production sends nothing until Gate B |
 
 What is collected: tool name, outcome, latency, error code, the confirmed project id, a salted hash of
 the user id (`uid_hash`, never the uid or email), MCP client name/version/protocol, the calling model
@@ -125,9 +126,17 @@ and key-shaped strings and capped at 300 characters. Logs never carry it.
 
 What is never collected: argument values, response bodies, image data, queries, raw uid, email, tokens.
 
-Agent-visible changes: every tool accepts two optional arguments, `context` (why the agent is calling
+Client labels (client name/version, protocol version, model) are sent only when they are a short safe token
+(letters, digits and `. _ - / ( ) +` and spaces, at most 64 characters, unchanged by the log scrubber); anything
+else is reported as `other`, in the logs and in PostHog alike. The intent is cut to 1000 characters, scrubbed
+(emails, URLs, phone numbers, IPv4/IPv6, keys and long ids), cut to 300 and scrubbed again.
+
+Agent-visible changes, only when `ANALYTICS_AGENT_ARGS="on"` (set in `env.staging.vars` only; off or absent in
+production, where events still flow but no tool changes): every tool accepts two optional arguments, `context` (why the agent is calling
 the tool) and `conversation_id` (groups calls). The wrapper adds them to each tool's schema and removes
-them before the handler runs, so tool code never sees them. The `get_more_tools` tool lets an agent say
+them before the handler runs, so tool code never sees them. A value that is not a string, or is longer than 4096
+characters, is dropped from analytics and the call proceeds normally. A tool that declares its own `context` or
+`conversation_id` keeps it (nothing is injected or stripped and it is never read as an intent). The `get_more_tools` tool lets an agent say
 what it needed that Scry does not offer; it records a missing-capability event and does nothing else.
 
 Add or replace a sink: write `src/analytics/sinks/<name>.ts` that implements `AnalyticsSink`
