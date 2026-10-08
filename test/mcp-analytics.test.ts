@@ -557,8 +557,8 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       SCRY_SEARCH_API_KEY: "test-api-key",
       SCRY_CALLER_ASSERTION_SECRET: "test-caller-assertion-secret",
       MCP_USAGE: undefined,
-      // Each test chooses its sinks; the wrangler production value (log,posthog) must not leak in as a default.
-      ...({ SCRY_LOG_SALT: "test-salt", ANALYTICS_SINKS: undefined } as Partial<Env>),
+      // Each test chooses its sinks and agent-args flag; the wrangler production values must not leak in as defaults.
+      ...({ SCRY_LOG_SALT: "test-salt", ANALYTICS_SINKS: undefined, ANALYTICS_AGENT_ARGS: undefined } as Partial<Env>),
       ...overrides,
     });
     agent.props = props;
@@ -892,15 +892,11 @@ describe("end to end in the Durable Object", () => {
     expect(parseSinks(undefined).names).toEqual(["log"]); // and the code default is still log only
   });
 
-  it("fix1-item8 guarantee-7 production has ANALYTICS_AGENT_ARGS off or absent; only env.staging.vars turns it on", () => {
+  it("fix1-item8 (after F22) production and staging both turn the agent-visible args on; the code default is off", () => {
     const config = parseJsonc(wranglerRaw) as { vars?: Record<string, unknown>; env?: Record<string, { vars?: Record<string, unknown> }> };
-    expect(agentArgsEnabled({ ANALYTICS_AGENT_ARGS: config.vars?.ANALYTICS_AGENT_ARGS as string | undefined })).toBe(false);
+    expect(config.vars?.ANALYTICS_AGENT_ARGS).toBe("on"); // founder decision F22, 2026-10-08
     expect(config.env?.staging?.vars?.ANALYTICS_AGENT_ARGS).toBe("on");
-    for (const [name, e] of Object.entries(config.env ?? {})) {
-      if (name === "staging") continue;
-      expect(agentArgsEnabled({ ANALYTICS_AGENT_ARGS: e.vars?.ANALYTICS_AGENT_ARGS as string | undefined }), name).toBe(false);
-    }
-    expect(wranglerRaw.match(/ANALYTICS_AGENT_ARGS/g)?.length).toBe(1); // only the staging value: nowhere else
+    expect(agentArgsEnabled({ ANALYTICS_AGENT_ARGS: undefined })).toBe(false); // absent = off
   });
 
   it("fix1-item8 with the flag off (the production shape) no tool gains context / conversation_id and get_more_tools is absent, yet events flow", async () => {
