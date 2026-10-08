@@ -557,7 +557,8 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       SCRY_SEARCH_API_KEY: "test-api-key",
       SCRY_CALLER_ASSERTION_SECRET: "test-caller-assertion-secret",
       MCP_USAGE: undefined,
-      ...({ SCRY_LOG_SALT: "test-salt" } as Partial<Env>),
+      // Each test chooses its sinks; the wrangler production value (log,posthog) must not leak in as a default.
+      ...({ SCRY_LOG_SALT: "test-salt", ANALYTICS_SINKS: undefined } as Partial<Env>),
       ...overrides,
     });
     agent.props = props;
@@ -883,17 +884,12 @@ describe("end to end in the Durable Object", () => {
     });
   });
 
-  it("guarantee-7 production sends nothing to PostHog: no sinks var, no token anywhere in the config", () => {
+  it("guarantee-7 (after Gate B) production and staging both send to log + PostHog; no token is committed anywhere", () => {
     const config = parseJsonc(wranglerRaw) as { vars?: Record<string, unknown>; env?: Record<string, { vars?: Record<string, unknown> }> };
-    expect(config.vars?.ANALYTICS_SINKS).toBeUndefined();
-    expect(JSON.stringify(config.vars)).not.toMatch(/posthog/i);
+    expect(config.vars?.ANALYTICS_SINKS).toBe("log,posthog"); // Gate B approved 2026-10-08; the token is a secret
     expect(config.env?.staging?.vars?.ANALYTICS_SINKS).toBe("log,posthog");
-    for (const [name, e] of Object.entries(config.env ?? {})) {
-      if (name === "staging") continue;
-      expect(String(e.vars?.ANALYTICS_SINKS ?? ""), name).not.toMatch(/posthog/i);
-    }
     expect(wranglerRaw).not.toMatch(/phc_[A-Za-z0-9]{10,}/); // no token committed
-    expect(parseSinks(undefined).names).toEqual(["log"]); // and the code default is log only
+    expect(parseSinks(undefined).names).toEqual(["log"]); // and the code default is still log only
   });
 
   it("fix1-item8 guarantee-7 production has ANALYTICS_AGENT_ARGS off or absent; only env.staging.vars turns it on", () => {
