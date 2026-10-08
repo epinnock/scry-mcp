@@ -31,6 +31,10 @@
     // No bypass token in production. Kill switch: set ISSUE_TOOLS_ENABLED to "0" (tools off
     // unless exactly "1").
     "ISSUE_TOOLS_ENABLED": "1",
+    // Snip capture tools (latest/get/list/delete_capture) ON in production (snip-capture Gate B 2026-10-08;
+    // the dashboard capture routes have been live in production since the 2026-10-08 joint release).
+    // Kill switch: set CAPTURE_TOOLS_ENABLED to "0" (tools off unless exactly "1").
+    "CAPTURE_TOOLS_ENABLED": "1",
     "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
   },
   // Producer only: the consumer is scry-diff-service-production (src/telemetry/delivery.ts).
