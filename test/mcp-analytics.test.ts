@@ -557,7 +557,8 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       SCRY_SEARCH_API_KEY: "test-api-key",
       SCRY_CALLER_ASSERTION_SECRET: "test-caller-assertion-secret",
       MCP_USAGE: undefined,
-      ...({ SCRY_LOG_SALT: "test-salt" } as Partial<Env>),
+      // Each test chooses its sinks; the wrangler production value (log,posthog) must not leak in as a default.
+      ...({ SCRY_LOG_SALT: "test-salt", ANALYTICS_SINKS: undefined } as Partial<Env>),
       ...overrides,
     });
     agent.props = props;
