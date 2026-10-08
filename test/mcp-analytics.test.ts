@@ -357,10 +357,12 @@ describe("log sink", () => {
     log.toolCall(buildToolCallEvent({
       requestId: "01M3EQG44Y0J8F2K6ZP9RX1T7C", tool: "search_components", outcome: "error", ms: 40, errCode: "ACCESS_DENIED",
       uidHash: "abcdef012345", client_name: "claude-code", client_version: "2.1.0", context: "secret intent words", inputKeys: ["query"], responseBytes: 9,
+      serverBuild: "28f387c84841a3bd40676a07c1cd930cf3a6683c", // a real 40-hex SCRY_COMMIT (F15: it was dropped as secret-shaped)
     }));
     expect(sink.lines).toHaveLength(1);
     const line = sink.lines[0] as unknown as Record<string, unknown>;
     expect(validateLine(line).errors).toEqual([]);
+    expect((line.attrs as Record<string, unknown>)["mcp.server_build"]).toBeUndefined(); // the build rides in top-level `version`
     expect(line).toMatchObject({ msg: "mcp_tool_call", route: "search_components", status: 403, request_id: "01M3EQG44Y0J8F2K6ZP9RX1T7C", uid_hash: "abcdef012345" });
     expect(line.client).toBeUndefined(); // third-party clients are not allow-listed for `client`; they ride in attrs
     expect(line.attrs).toMatchObject({ "mcp.client_name": "claude-code", "mcp.client_version": "2.1.0", "mcp.has_intent": true, "mcp.input_keys": ["query"], "mcp.response_bytes": 9 });
