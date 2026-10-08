@@ -20,10 +20,12 @@
     "@cloudflare/workers-oauth-provider": "^0.8.3",
     "@modelcontextprotocol/ext-apps": "^1.2.2",
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@posthog/mcp": "0.22.2",
     "@sentry/cloudflare": "^10.69.0",
     "agents": "^0.0.87",
     "hono": "^4.7.0",
     "jose": "^6.0.0",
+    "posthog-node": "5.55.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "zod": "^3.24.0"

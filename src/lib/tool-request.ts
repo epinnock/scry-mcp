@@ -19,7 +19,12 @@
  * - reports a thrown handler error to Sentry with the tags `request_id` and
  *   `tool`, and turns it into a structured tool error instead of a raw message.
  *
- * Observability never breaks a tool call: logging and Sentry failures are
+ * - (feature mcp-analytics) when `analytics` is configured, emits ONE vendor-neutral `McpToolCallEvent` per
+ *   call next to the request line (src/analytics/), and, at registration, adds the optional `context` and
+ *   `conversation_id` arguments to every tool's input schema and strips the ones it added before the
+ *   handler runs. The request line is unchanged.
+ *
+ * Observability never breaks a tool call: logging, analytics and Sentry failures are
  * swallowed.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -27,6 +32,18 @@ import * as Sentry from "@sentry/cloudflare";
 import { REQUEST_ID_HEADER, mintRequestId } from "./request-id";
 import type { Logger } from "./scry-log";
 import { errCodeOf, getLogger, hashUid } from "./log";
+import type { Analytics } from "../analytics/sinks";
+import {
+  CONTEXT_ARG,
+  CONVERSATION_ARG,
+  MISSING_CAPABILITY_TOOL,
+  buildToolCallEvent,
+  presentInputKeys,
+  responseBytes,
+  statusOfOutcome,
+  type SessionInfo,
+} from "../analytics/event";
+import { prepareSchema, stripInjected, isPlainShape, type ArgMeta } from "../analytics/inject";
 
 interface ToolCallContext {
   requestId: string;
@@ -153,16 +170,22 @@ export interface ToolWrapOptions {
   identify?: () => { uid?: string; salt?: string; env?: string };
   /** Error reporting for a thrown handler. Default: Sentry with request_id + tool tags. */
   report?: (err: unknown, tags: { request_id: string; tool: string }) => void;
+  /** Vendor-neutral analytics (feature mcp-analytics). Absent = no event and no argument injection. */
+  analytics?: Analytics;
+  /**
+   * Add the optional `context` / `conversation_id` arguments to every tool (ANALYTICS_AGENT_ARGS="on"). Default
+   * false: events are still emitted, but the tools' schemas are untouched and no intent or conversation is read.
+   */
+  injectArgs?: boolean;
+  /** MCP session and client facts held by the Durable Object (client name/version, protocol, session id). */
+  session?: () => SessionInfo | Promise<SessionInfo>;
+  /** Immutable build id (SCRY_COMMIT) for the event. */
+  serverBuild?: string;
 }
 
-/** HTTP-like status for a tool outcome: 200 ok; 402/403/429 for credits/access/rate limit; server-side failures 500; other tool errors 400. */
+/** HTTP-like status for a tool outcome: see `statusOfOutcome`. */
 function statusOf(line: RequestLine): number {
-  if (line.outcome === "ok") return 200;
-  const c = (line.code ?? "").toUpperCase();
-  if (c === "INSUFFICIENT_CREDITS") return 402;
-  if (c === "ACCESS_DENIED") return 403;
-  if (c === "RATE_LIMITED") return 429;
-  return c === "INTERNAL_ERROR" || c === "UPSTREAM_TIMEOUT" || c.startsWith("GEMINI") || /_5\d\d$/.test(c) ? 500 : 400;
+  return statusOfOutcome(line.outcome, line.code);
 }
 
 function defaultEmit(line: RequestLine, logger: Logger | undefined, extra: { uid_hash?: string }): void {
@@ -197,17 +220,87 @@ function thrownResult(err: unknown): ToolResultLike {
  
 type AnyHandler = (...args: any[]) => unknown;
 
-/** Wrap one tool handler; see the module comment for what it adds. */
-export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWrapOptions = {}): (...args: unknown[]) => Promise<unknown> {
+type CallFacts = {
+  requestId: string;
+  tool: string;
+  isError: boolean;
+  ms: number;
+  code?: string;
+  projectId?: string;
+  result: unknown;
+  rawArgs: unknown;
+  extra: unknown;
+};
+
+const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
+
+/** The calling model when the client states it in request metadata (Codex). Never guessed. */
+function modelFromMeta(extra: unknown): string | undefined {
+  try {
+    const meta = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.[CODEX_TURN_METADATA_KEY] as { model?: unknown } | undefined;
+    return typeof meta?.model === "string" ? meta.model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build and emit the analytics event for one finished call. Fire and forget: the hash and the session lookup
+ * happen off the request path, and every failure is swallowed (G3).
+ */
+function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: CallFacts, uidHash: Promise<string | undefined>): void {
+  const analytics = opts.analytics;
+  if (!analytics) return;
+  const raw = (f.rawArgs && typeof f.rawArgs === "object" ? f.rawArgs : {}) as Record<string, unknown>;
+  // Sizes and names only, computed now so the result object is read before anything else can touch it.
+  const inputKeys = presentInputKeys(raw, meta?.declared, meta?.injected);
+  const bytes = responseBytes(f.result);
+  // F3: only an argument the wrapper added (or get_more_tools' own `context`, which exists to be the intent) is read
+  // as analytics input. A tool's own `context` / `conversation_id` argument is its data, never an intent.
+  const context = meta && (meta.injected.has(CONTEXT_ARG) || f.tool === MISSING_CAPABILITY_TOOL) ? raw[CONTEXT_ARG] : undefined;
+  const conversationId = meta?.injected.has(CONVERSATION_ARG) ? raw[CONVERSATION_ARG] : undefined;
+  const model = modelFromMeta(f.extra);
+  void (async () => {
+    const [uid_hash, session] = await Promise.all([uidHash, Promise.resolve(opts.session?.()).catch(() => undefined)]);
+    const who = opts.identify?.() ?? {};
+    analytics.emit(
+      buildToolCallEvent({
+        ...(session ?? {}),
+        requestId: f.requestId,
+        tool: f.tool,
+        outcome: f.isError ? "error" : "ok",
+        ms: f.ms,
+        errCode: f.code,
+        projectId: f.projectId,
+        uidHash: uid_hash,
+        conversationId,
+        llmModel: model,
+        llmModelSource: model ? "client_metadata" : undefined,
+        context,
+        inputKeys,
+        responseBytes: bytes,
+        missingCapability: f.tool === MISSING_CAPABILITY_TOOL,
+        serverBuild: opts.serverBuild,
+        env: who.env,
+      }),
+    );
+  })().catch(() => {});
+}
+
+/** Wrap one tool handler; see the module comment for what it adds. `meta` is set when the schema was injected. */
+export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWrapOptions = {}, meta?: ArgMeta): (...args: unknown[]) => Promise<unknown> {
   const report = opts.report ?? defaultReport;
   const wrapped = async (...args: unknown[]) => {
     const requestId = mintRequestId();
     const start = Date.now();
     const store: ToolCallContext = { requestId };
+    const rawArgs = args[0];
+    // G6: the handler never sees the arguments the wrapper added.
+    const callArgs = meta && meta.injected.size > 0 ? [stripInjected(args[0], meta.injected), ...args.slice(1)] : args;
     return context.run(store, async () => {
       let result: unknown;
       try {
-        result = await handler(...args);
+        result = await handler(...callArgs);
       } catch (err) {
         try {
           report(err, { request_id: requestId, tool });
@@ -219,22 +312,25 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
       result = withRequestIdInErrors(result, requestId);
       try {
         const isError = (result as ToolResultLike | undefined)?.isError === true;
+        const ms = Date.now() - start;
         const line = buildRequestLine({
           requestId,
           tool,
           outcome: isError ? "error" : "ok",
-          ms: Date.now() - start,
+          ms,
           code: isError ? toolErrorCode(result) : undefined,
           projectId: store.projectId,
         });
-        if (opts.emit) opts.emit(line);
-        else {
-          // Fire and forget: the hash is computed inside the log call, never on the request path (G4).
-          const who = opts.identify?.() ?? {};
-          hashUid(who.uid, who.salt, who.env)
-            .then(uid_hash => defaultEmit(line, opts.logger, { uid_hash }))
-            .catch(() => {});
+        // Fire and forget: the hash is computed off the request path (G4).
+        const who = opts.identify?.() ?? {};
+        const uidHash = hashUid(who.uid, who.salt, who.env);
+        try {
+          if (opts.emit) opts.emit(line);
+          else uidHash.then(uid_hash => defaultEmit(line, opts.logger, { uid_hash })).catch(() => {});
+        } catch {
+          // A failing request-line sink must not stop the analytics event.
         }
+        emitAnalytics(opts, meta, { requestId, tool, isError, ms, code: line.code, projectId: line.project_id, result, rawArgs, extra: args[1] }, uidHash);
       } catch {
         // Logging must never change the answer.
       }
@@ -246,6 +342,33 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
 
 type Registrar = { registerTool: AnyHandler; tool: AnyHandler };
 
+/** Wrap `handler` (and inject the analytics arguments into `schema`) when analytics is on. */
+function prepare(name: string, schema: unknown, handler: AnyHandler, opts: ToolWrapOptions): { schema: unknown; handler: (...a: unknown[]) => Promise<unknown>; changed: boolean } {
+  if (!opts.analytics || !opts.injectArgs) return { schema, handler: wrapToolHandler(name, handler, opts), changed: false };
+  const prep = prepareSchema(schema);
+  const inner: AnyHandler = prep.meta.adaptNoSchema ? (_args: unknown, extra: unknown) => handler(extra) : handler;
+  return { schema: prep.schema, handler: wrapToolHandler(name, inner, opts, prep.meta), changed: prep.changed };
+}
+
+/** Split `tool(name, [description], [shape], [annotations], cb)` into its parts, as the SDK reads it. */
+function parseToolArgs(args: unknown[]): { description?: string; shape?: unknown; annotations?: unknown; cb: AnyHandler } | null {
+  const rest = args.slice(1, args.length - 1);
+  const cb = args[args.length - 1] as AnyHandler;
+  let description: string | undefined;
+  if (typeof rest[0] === "string") description = rest.shift() as string;
+  let shape: unknown;
+  let annotations: unknown;
+  if (rest.length > 0) {
+    if (isPlainShape(rest[0])) {
+      shape = rest.shift();
+      if (rest.length > 0 && typeof rest[0] === "object" && rest[0] !== null) annotations = rest.shift();
+    } else if (typeof rest[0] === "object" && rest[0] !== null) {
+      annotations = rest.shift();
+    }
+  }
+  return rest.length === 0 ? { description, shape, annotations, cb } : null;
+}
+
 /**
  * Patch `server.registerTool` and `server.tool` so every tool registered after
  * this call (including via ext-apps `registerAppTool` and `registerIssueTools`)
@@ -255,14 +378,35 @@ export function instrumentToolRegistration(server: object, opts: ToolWrapOptions
   const s = server as Registrar & { __scryRequestIdWrapped?: boolean };
   if (s.__scryRequestIdWrapped) return;
   s.__scryRequestIdWrapped = true;
-  for (const method of ["registerTool", "tool"] as const) {
-    const original = s[method].bind(server);
-    s[method] = (...args: unknown[]) => {
-      const last = args.length - 1;
-      if (typeof args[0] === "string" && typeof args[last] === "function") {
-        args[last] = wrapToolHandler(args[0], args[last] as AnyHandler, opts);
-      }
-      return original(...args);
-    };
-  }
+
+  const originalRegisterTool = s.registerTool.bind(server);
+  s.registerTool = (...args: unknown[]) => {
+    const [name, config, cb] = args as [unknown, Record<string, unknown> | undefined, unknown];
+    if (typeof name !== "string" || typeof cb !== "function") return originalRegisterTool(...args);
+    const p = prepare(name, config?.inputSchema, cb as AnyHandler, opts);
+    const cfg = p.changed ? { ...config, inputSchema: p.schema } : config;
+    return originalRegisterTool(name, cfg, p.handler);
+  };
+
+  const originalTool = s.tool.bind(server);
+  s.tool = (...args: unknown[]) => {
+    const last = args.length - 1;
+    if (typeof args[0] !== "string" || typeof args[last] !== "function") return originalTool(...args);
+    const parts = parseToolArgs(args);
+    if (!parts) {
+      // An overload this wrapper does not recognise: wrap the handler only, as before.
+      args[last] = wrapToolHandler(args[0], args[last] as AnyHandler, opts);
+      return originalTool(...args);
+    }
+    const p = prepare(args[0], parts.shape, parts.cb, opts);
+    if (!p.changed) {
+      args[last] = p.handler;
+      return originalTool(...args);
+    }
+    const mid: unknown[] = [];
+    if (parts.description !== undefined) mid.push(parts.description);
+    mid.push(p.schema);
+    if (parts.annotations !== undefined) mid.push(parts.annotations);
+    return originalTool(args[0], ...mid, p.handler);
+  };
 }

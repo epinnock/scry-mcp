@@ -51,6 +51,8 @@ import { FirestoreReader, WalletResolutionError, resolveCallerWallet, type Resol
 import { mintRequestId } from "./lib/request-id";
 import { errCodeOf, getLogger, hashUid, msgWords, type LogEnv } from "./lib/log";
 import { confirmProjectAccess, currentRequestId, instrumentToolRegistration, requestIdHeaders } from "./lib/tool-request";
+import { agentArgsEnabled, createAnalyticsFromEnv, buildInitializeEvent, buildToolsListEvent, MISSING_CAPABILITY_TOOL, type Analytics, type SessionInfo } from "./analytics";
+import { onToolsListed } from "./analytics/hooks";
 const RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 /** Durable Object storage key for the MCP client's initialize-time clientInfo (issue audit label). */
 const CLIENT_INFO_KEY = "mcpClientInfo";
@@ -140,6 +142,55 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   // One Durable Object instance serves one user, so a per-instance cache of
   // the short-lived assertion is per-user by construction.
   private callerAssertion = new CallerAssertionCache();
+
+  // --- Analytics (feature mcp-analytics): vendor-neutral events to the configured sinks ---
+  private analytics: Analytics | null = null;
+  private sessionFacts: SessionInfo | null = null;
+  private analyticsWarnAt = new Map<string, number>();
+
+  /**
+   * MCP session facts for events: the opaque Durable Object id (one DO per MCP session), and the client
+   * name/version/protocol stored at initialize (the DO hibernates, so memory alone is not enough).
+   */
+  private async sessionInfo(): Promise<SessionInfo> {
+    if (this.sessionFacts) return this.sessionFacts;
+    let stored: { name?: string; version?: string; protocolVersion?: string } | undefined;
+    try {
+      stored = await this.ctx.storage.get(CLIENT_INFO_KEY);
+    } catch {
+      stored = undefined;
+    }
+    const facts: SessionInfo = {
+      session_id: `do_${this.ctx.id.toString().slice(0, 16)}`,
+      client_name: stored?.name,
+      client_version: stored?.version,
+      protocol_version: stored?.protocolVersion,
+    };
+    if (stored) this.sessionFacts = facts;
+    return facts;
+  }
+
+  /** Sink failures become at most one warn line per sink per minute (never the error text). */
+  private analyticsFailed(sink: string): void {
+    const now = Date.now();
+    if (now - (this.analyticsWarnAt.get(sink) ?? 0) < 60_000) return;
+    this.analyticsWarnAt.set(sink, now);
+    getLogger(this.env).warn("analytics sink failed", { err_code: errCodeOf(`analytics_${sink}`, "analytics_sink") });
+  }
+
+  /** A config or start-up problem in analytics: one schema-v1 warning line, fixed words and err_code (never a value). */
+  private analyticsWarn(msg: string, errCode: string): void {
+    getLogger(this.env).warn(msg, { err_code: errCode });
+  }
+
+  private emitSessionEvent(build: (uidHash: string | undefined, session: SessionInfo) => Parameters<Analytics["emit"]>[0]): void {
+    const analytics = this.analytics;
+    if (!analytics) return;
+    void (async () => {
+      const uid = await hashUid(this.props?.firebaseUid, (this.env as LogEnv).SCRY_LOG_SALT, this.env.SCRY_ENV);
+      analytics.emit(build(uid, await this.sessionInfo()));
+    })().catch(() => {});
+  }
 
   // --- Issue tools (feature issue-resolution): MCP → dashboard /api/agent/issues/* ---
   private dashboardAssertion = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
@@ -933,9 +984,23 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
   async init() {
     // Every tool registered below gets a request id, error-body request_id and
     // an end-of-call request line (src/lib/tool-request.ts).
+    // Also (feature mcp-analytics) one vendor-neutral event per call to the sinks named in ANALYTICS_SINKS,
+    // and the optional `context` / `conversation_id` arguments on every tool (src/analytics/).
+    this.analytics = createAnalyticsFromEnv(this.env, {
+      logger: () => getLogger(this.env),
+      waitUntil: p => this.ctx.waitUntil(p),
+      onError: sink => this.analyticsFailed(sink),
+      warn: (msg, code) => this.analyticsWarn(msg, code),
+    });
+    // ANALYTICS_AGENT_ARGS="on" (staging only) is what makes analytics visible to agents; off, events still flow.
+    const agentArgs = agentArgsEnabled(this.env);
     instrumentToolRegistration(this.server, {
       logger: getLogger(this.env),
       identify: () => ({ uid: this.props?.firebaseUid, salt: (this.env as LogEnv).SCRY_LOG_SALT, env: this.env.SCRY_ENV }),
+      analytics: this.analytics,
+      injectArgs: agentArgs,
+      session: () => this.sessionInfo(),
+      serverBuild: this.env.SCRY_COMMIT,
     });
 
     // --- Register widget resources (MCP Apps UI) ---
@@ -1541,10 +1606,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     // own handler (_oninitialize, not public API) still answers the request.
     const sdkServer = this.server.server as unknown as { _oninitialize(r: unknown): Promise<unknown> };
     this.server.server.setRequestHandler(InitializeRequestSchema, async (request) => {
-      const info = request.params.clientInfo as { name?: string; title?: string } | undefined;
+      const info = request.params.clientInfo as { name?: string; title?: string; version?: string } | undefined;
+      const protocolVersion = request.params.protocolVersion as string | undefined;
       if (info) {
-        await this.ctx.storage.put(CLIENT_INFO_KEY, { name: info.name, title: info.title })
+        await this.ctx.storage.put(CLIENT_INFO_KEY, { name: info.name, title: info.title, version: info.version, protocolVersion })
           .catch((err: unknown) => this.logDiagnostic("clientInfo", { error: String(err) }));
+        this.sessionFacts = null;
+        this.emitSessionEvent((uid_hash, session) =>
+          buildInitializeEvent({ ...session, uidHash: uid_hash, serverBuild: this.env.SCRY_COMMIT, env: this.env.SCRY_ENV }),
+        );
       }
       return sdkServer._oninitialize(request) as never;
     });
@@ -1570,6 +1640,32 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         writeLimiter: this.captureWriteLimiter,
         log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
       });
+    }
+
+    // --- get_more_tools: lets an agent say what it needed that Scry's tools do not offer (feature mcp-analytics) ---
+    // Registered only with ANALYTICS_AGENT_ARGS="on" (staging): it is agent-visible. The event it produces
+    // (missing_capability) reaches whichever sinks are configured.
+    if (agentArgs) {
+      this.server.registerTool(
+        MISSING_CAPABILITY_TOOL,
+        {
+          description:
+            "Call this when your task needs a capability the Scry tools do not offer, or when you could not find a tool that fits. " +
+            "Describe the goal and the kind of tool that would help. Nothing runs and no data is read; the request is recorded so the Scry team can build it.",
+          inputSchema: {
+            context: z.string().describe("A short description of your goal and what kind of Scry tool would help accomplish it. Do not include names, emails, URLs or keys."),
+          },
+          annotations: { title: "Request a missing capability", readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
+        },
+        async () => ({
+          content: [
+            {
+              type: "text" as const,
+              text: "Noted. Scry does not have a tool for this yet, and your request has been recorded for the team. Continue with the existing Scry tools if any of them gets you part of the way.",
+            },
+          ],
+        }),
+      );
     }
 
     // --- whoami: authenticated user info ---
@@ -1598,5 +1694,12 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         };
       }
     );
+
+    // Last: tools/list events (the SDK installs its handler on the first registration).
+    onToolsListed(this.server, toolNames => {
+      this.emitSessionEvent((uid_hash, session) =>
+        buildToolsListEvent({ ...session, toolNames, uidHash: uid_hash, serverBuild: this.env.SCRY_COMMIT, env: this.env.SCRY_ENV }),
+      );
+    });
   }
 }

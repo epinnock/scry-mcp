@@ -23,6 +23,24 @@ export default tseslint.config(
     rules: sonarjsWarnRules,
   },
   {
+    // mcp-analytics G5: PostHog is a replaceable sink. Only the posthog sink file may import its SDKs.
+    files: ["**/*.ts"],
+    ignores: ["src/analytics/sinks/posthog.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@posthog/*", "posthog-node", "posthog-node/*"],
+              message: "Import PostHog only in src/analytics/sinks/posthog.ts (mcp-analytics G5: the sink must stay replaceable).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["**/*.ts"],
     rules: {
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
