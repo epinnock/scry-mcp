@@ -22,7 +22,7 @@ import {
   type McpToolCallEvent,
 } from "../src/analytics/event";
 import { createAnalytics, noAnalytics, parseSinks, type AnalyticsSink } from "../src/analytics/sinks";
-import { createLogSink, clientLabel } from "../src/analytics/sinks/log";
+import { createLogSink } from "../src/analytics/sinks/log";
 import { createPostHogSink } from "../src/analytics/sinks/posthog";
 import { onToolsListed } from "../src/analytics/hooks";
 import { prepareSchema, stripInjected } from "../src/analytics/inject";
@@ -230,7 +230,10 @@ describe("log sink", () => {
     expect(sink.lines).toHaveLength(1);
     const line = sink.lines[0] as unknown as Record<string, unknown>;
     expect(validateLine(line).errors).toEqual([]);
-    expect(line).toMatchObject({ msg: "mcp_tool_call", route: "search_components", status: 403, request_id: "01M3EQG44Y0J8F2K6ZP9RX1T7C", uid_hash: "abcdef012345", client: "claude-code/2.1.0" });
+    expect(line).toMatchObject({ msg: "mcp_tool_call", route: "search_components", status: 403, request_id: "01M3EQG44Y0J8F2K6ZP9RX1T7C", uid_hash: "abcdef012345" });
+    expect(line.client).toBeUndefined(); // third-party clients are not allow-listed for `client`; they ride in attrs
+    expect(line.attrs).toMatchObject({ "mcp.client_name": "claude-code", "mcp.client_version": "2.1.0", "mcp.has_intent": true, "mcp.input_keys": ["query"], "mcp.response_bytes": 9 });
+    expect((line as { attrs_drop?: number }).attrs_drop).toBeUndefined();
     expect(JSON.stringify(line)).not.toContain("secret intent words");
   });
 
@@ -242,7 +245,9 @@ describe("log sink", () => {
     log.toolsList(buildToolsListEvent({ toolNames: ["a"], env: "staging" }));
     expect(sink.lines.map(l => l.msg)).toEqual(["mcp_initialize", "mcp_tools_list"]);
     for (const l of sink.lines) expect(validateLine(l as unknown as Record<string, unknown>).errors).toEqual([]);
-    expect(clientLabel("???", "!!")).toBeUndefined();
+    const [init, list] = sink.lines as unknown as Array<Record<string, unknown>>;
+    expect(init.attrs).toMatchObject({ "mcp.client_name": "cursor", "mcp.client_version": "1.0" });
+    expect(list.attrs).toMatchObject({ "mcp.tool_count": 1 });
   });
 });
 
@@ -483,9 +488,36 @@ describe("end to end in the Durable Object", () => {
       expect(requestLines(w).map(l => l.request_id)).toEqual(lines.map(l => l.request_id));
       for (const l of lines) {
         expect(validateLine(l).errors).toEqual([]);
-        expect(l.client).toBe("analytics-test/9.8.7");
+        expect(l.client).toBeUndefined();
+        // The full event rides in the registered attrs: nothing dropped, no intent text, no argument values.
+        expect(l.attrs_drop).toBeUndefined();
+        expect(l.attrs).toMatchObject({
+          "mcp.client_name": "analytics-test",
+          "mcp.client_version": "9.8.7",
+          "mcp.has_intent": false,
+          "mcp.missing_capability": false,
+        });
+        const a = l.attrs as Record<string, unknown>;
+        expect(a["mcp.session_id"]).toMatch(/^do_[0-9a-f]{16}$/);
+        expect(typeof a["mcp.response_bytes"]).toBe("number");
+        expect(JSON.stringify(a)).not.toContain(ARG_CANARY);
       }
+      expect((lines[0].attrs as Record<string, string[]>)["mcp.input_keys"]).toEqual(expect.arrayContaining(["query", "project_id"])); // names only
+      expect((lines[2].attrs as Record<string, string[]>)["mcp.input_keys"]).toEqual([]);
     }
+  });
+
+  it("guarantee-4 the line's attrs carry the conversation, intent flag and source but never the intent text", async () => {
+    const w = world();
+    await withClient({ ANALYTICS_SINKS: "log" } as Partial<Env>, async client => {
+      await callSearch(client, { context: `find the login form for ${EMAIL}`, conversation_id: "conv-1" });
+    });
+    await vi.waitFor(() => expect(toolLines(w)).toHaveLength(1));
+    const [line] = toolLines(w);
+    expect(validateLine(line).errors).toEqual([]);
+    expect(line.attrs_drop).toBeUndefined();
+    expect(line.attrs).toMatchObject({ "mcp.conversation_id": "conv-1", "mcp.has_intent": true, "mcp.intent_source": "context_parameter" });
+    expect(JSON.stringify(line)).not.toMatch(/login form|acme|@/);
   });
 
   it("guarantee-4 an erroring call is an error line with its code, and a $exception in PostHog", async () => {
@@ -636,7 +668,7 @@ describe("end to end in the Durable Object", () => {
       expect(w.posthog.join("")).toContain("$mcp_tools_list");
     });
     const init = w.sink.lines.find(l => l.msg === "mcp_initialize") as unknown as Record<string, unknown>;
-    expect(init.client).toBe("analytics-test/9.8.7");
+    expect(init.attrs).toMatchObject({ "mcp.client_name": "analytics-test", "mcp.client_version": "9.8.7" });
     expect(w.posthog.join("")).toContain("analytics-test");
   });
 

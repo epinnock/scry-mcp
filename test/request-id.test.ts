@@ -34,6 +34,8 @@ const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const UUID = "6fc0a1a8-f408-4725-b426-617a35de8d44";
 
 // Canary values: none of these may appear in a request line or a Sentry event.
+/** A Firebase-style project id (20 alphanumerics): the shape the shared logger keeps in `project`. */
+const FB_PROJECT = "Pr0jectIdTwentyChars";
 const CANARY_QUERY = "canary-secret-product-name-7f3a";
 const CANARY_EMAIL = "canary.user@example.test";
 const CANARY_UID = "canary-firebase-uid-91b2";
@@ -364,7 +366,7 @@ describe("tool calls through ScryMCP", () => {
     const seen = mockFetch(() => Response.json(SEARCH_OK));
     const log = spyConsole();
     await withClient({ SCRY_LOG_SALT: "test-salt" } as Partial<Env>, async (client) => {
-      const r = await client.callTool({ name: "search_components", arguments: { query: CANARY_QUERY, limit: 5, project_id: "proj-1" } });
+      const r = await client.callTool({ name: "search_components", arguments: { query: CANARY_QUERY, limit: 5, project_id: FB_PROJECT } });
       expect(r.isError).not.toBe(true);
     });
     await new Promise(r => setTimeout(r, 20)); // the request line hashes the uid off the request path
@@ -374,7 +376,7 @@ describe("tool calls through ScryMCP", () => {
     expect(id).toMatch(ULID);
     expect(search[0].headers.get("Authorization")).toBe("Bearer test-api-key");
     const lines = requestLines(log);
-    expect(lines).toEqual([{ v: 1, ts: expect.any(String), level: "info", service: "mcp", env: expect.stringMatching(/^(staging|development)$/), msg: "request", request_id: id, route: "search_components", status: 200, ms: expect.any(Number), project: "proj-1", uid_hash: expect.stringMatching(/^[0-9a-f]{12}$/) }]);
+    expect(lines).toEqual([{ v: 1, ts: expect.any(String), level: "info", service: "mcp", env: expect.stringMatching(/^(staging|development)$/), msg: "request", request_id: id, route: "search_components", status: 200, ms: expect.any(Number), project: FB_PROJECT, uid_hash: expect.stringMatching(/^[0-9a-f]{12}$/) }]);
     // guarantee-3: no uid, email or query text in the request line
     const text = JSON.stringify(lines);
     for (const canary of [CANARY_UID, CANARY_EMAIL, CANARY_QUERY]) expect(text).not.toContain(canary);
@@ -414,10 +416,10 @@ describe("tool calls through ScryMCP", () => {
     mockFetch(() => Response.json({ issues: [], next_cursor: null }));
     log = spyConsole();
     await withClient(dashEnv, async (client) => {
-      await client.callTool({ name: "list_design_issues", arguments: { project_id: "proj-1" } });
+      await client.callTool({ name: "list_design_issues", arguments: { project_id: FB_PROJECT } });
     });
     lines = requestLines(log);
-    expect(lines).toEqual([expect.objectContaining({ route: "list_design_issues", status: 200, project: "proj-1" })]);
+    expect(lines).toEqual([expect.objectContaining({ route: "list_design_issues", status: 200, project: FB_PROJECT })]);
   });
 
   it("each tool call gets its own id", async () => {
