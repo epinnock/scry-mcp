@@ -342,9 +342,16 @@ export function wrapToolHandler(tool: string, handler: AnyHandler, opts: ToolWra
 
 type Registrar = { registerTool: AnyHandler; tool: AnyHandler };
 
+/**
+ * Tools whose arguments are the user's own words and must never be restated in analytics (stock-metasearch G7:
+ * the search_stock query). They get no injected `context` / `conversation_id`, so an agent is never asked for an
+ * intent sentence that would repeat the query. Their events still flow, with argument names and sizes only.
+ */
+export const NO_AGENT_ARGS_TOOLS: ReadonlySet<string> = new Set(["search_stock"]);
+
 /** Wrap `handler` (and inject the analytics arguments into `schema`) when analytics is on. */
 function prepare(name: string, schema: unknown, handler: AnyHandler, opts: ToolWrapOptions): { schema: unknown; handler: (...a: unknown[]) => Promise<unknown>; changed: boolean } {
-  if (!opts.analytics || !opts.injectArgs) return { schema, handler: wrapToolHandler(name, handler, opts), changed: false };
+  if (!opts.analytics || !opts.injectArgs || NO_AGENT_ARGS_TOOLS.has(name)) return { schema, handler: wrapToolHandler(name, handler, opts), changed: false };
   const prep = prepareSchema(schema);
   const inner: AnyHandler = prep.meta.adaptNoSchema ? (_args: unknown, extra: unknown) => handler(extra) : handler;
   return { schema: prep.schema, handler: wrapToolHandler(name, inner, opts, prep.meta), changed: prep.changed };

@@ -1,0 +1,134 @@
+{
+  "items": [
+    {
+      "provider": "pixabay",
+      "providerItemId": "195893",
+      "title": "",
+      "tags": [
+        "blossom",
+        "bloom",
+        "flower"
+      ],
+      "creator": "Josch13",
+      "creatorUrl": "https://pixabay.com/users/Josch13-48777/",
+      "creditLine": "Image by Josch13 from Pixabay",
+      "pageUrl": "https://pixabay.com/illustrations/blossom-bloom-flower-195893/",
+      "previewUrl": "https://pixabay.com/get/g1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70_640.jpg",
+      "previewWidth": 640,
+      "previewHeight": 360,
+      "type": "illustration",
+      "licenseLabel": "Pixabay Content License"
+    },
+    {
+      "provider": "unsplash",
+      "providerItemId": "eOLpJytrbsQ",
+      "title": "A man drinking a coffee.",
+      "tags": [
+        "coffee",
+        "desk"
+      ],
+      "creator": "Jeff Sheldon",
+      "creatorUrl": "https://unsplash.com/@ugmonk?utm_source=scry&utm_medium=referral",
+      "creditLine": "Photo by Jeff Sheldon on Unsplash",
+      "pageUrl": "https://unsplash.com/photos/eOLpJytrbsQ?utm_source=scry&utm_medium=referral",
+      "previewUrl": "https://images.unsplash.com/photo-1?w=400&fit=max",
+      "previewWidth": 400,
+      "previewHeight": 300,
+      "type": "photo",
+      "licenseLabel": "Unsplash License"
+    },
+    {
+      "provider": "openverse",
+      "providerItemId": "4bbfe191-1cca-4a9b-9dd8-7cd2a6b2c5a4",
+      "title": "Empty street",
+      "tags": [
+        "street",
+        "empty"
+      ],
+      "creator": "Jane Doe",
+      "creatorUrl": "https://www.flickr.com/photos/12345",
+      "creditLine": "\"Empty street\" by Jane Doe is licensed under CC BY 2.0.",
+      "pageUrl": "https://www.flickr.com/photos/12345/67890",
+      "previewUrl": "https://api.openverse.org/v1/images/4bbfe191-1cca-4a9b-9dd8-7cd2a6b2c5a4/thumb/",
+      "previewWidth": 600,
+      "previewHeight": 400,
+      "type": "photo",
+      "licenseLabel": "CC BY 2.0"
+    },
+    {
+      "provider": "pixabay",
+      "providerItemId": "2345678",
+      "title": "",
+      "tags": [
+        "empty",
+        "box",
+        "state"
+      ],
+      "creator": "Jane Doe",
+      "creatorUrl": "https://pixabay.com/users/Jane%20Doe-1234/",
+      "creditLine": "Image by Jane Doe from Pixabay",
+      "pageUrl": "https://pixabay.com/vectors/empty-state-box-2345678/",
+      "previewUrl": "https://pixabay.com/get/gaabbccddeeff00112233445566778899aabbccddeeff00112233445566778899_640.png",
+      "previewWidth": 640,
+      "previewHeight": 640,
+      "type": "vector",
+      "licenseLabel": "Pixabay Content License",
+      "isAiGenerated": false
+    },
+    {
+      "provider": "unsplash",
+      "providerItemId": "Xq9d3kLmZ0w",
+      "title": "white and blue abstract painting",
+      "tags": [],
+      "creator": "abstractfan",
+      "creatorUrl": "https://unsplash.com/@abstractfan?utm_source=scry&utm_medium=referral",
+      "creditLine": "Photo by abstractfan on Unsplash",
+      "pageUrl": "https://unsplash.com/photos/Xq9d3kLmZ0w?utm_source=scry&utm_medium=referral",
+      "previewUrl": "https://images.unsplash.com/photo-2?w=400&fit=max",
+      "previewWidth": 400,
+      "previewHeight": 600,
+      "type": "photo",
+      "licenseLabel": "Unsplash License"
+    },
+    {
+      "provider": "openverse",
+      "providerItemId": "0a1b2c3d-1111-4222-8333-444455556666",
+      "title": "Line drawing of a box",
+      "tags": [
+        "box"
+      ],
+      "creator": "Wiki User",
+      "creatorUrl": "https://commons.wikimedia.org/wiki/User:WikiUser",
+      "creditLine": "\"Line drawing of a box\" by Wiki User is marked with CC0 1.0.",
+      "pageUrl": "https://commons.wikimedia.org/wiki/File:Box.svg",
+      "previewUrl": "https://api.openverse.org/v1/images/0a1b2c3d-1111-4222-8333-444455556666/thumb/",
+      "previewWidth": 500,
+      "previewHeight": 500,
+      "type": "illustration",
+      "licenseLabel": "CC0 1.0"
+    }
+  ],
+  "providers": {
+    "pexels": {
+      "status": "disabled",
+      "count": 0,
+      "ms": 0
+    },
+    "pixabay": {
+      "status": "ok",
+      "count": 2,
+      "ms": 0
+    },
+    "unsplash": {
+      "status": "ok",
+      "count": 2,
+      "ms": 0
+    },
+    "openverse": {
+      "status": "ok",
+      "count": 2,
+      "ms": 0
+    }
+  },
+  "request_id": "01J9ZZZZZZZZZZZZZZZZZZZZZZ"
+}

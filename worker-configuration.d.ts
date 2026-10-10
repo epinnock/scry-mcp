@@ -35,6 +35,12 @@ declare namespace Cloudflare {
     ISSUE_TOOLS_ENABLED?: string;
     /** "1" registers the four snip capture tools (latest/get/list/delete_capture). Off by default (production until Gate B). */
     CAPTURE_TOOLS_ENABLED?: string;
+    /** "1" registers the search_stock tool (feature stock-metasearch). Off by default; production unset until Gate B. */
+    STOCK_TOOLS_ENABLED?: string;
+    /** scry-stock Worker base URL (callers use the workers.dev host). */
+    STOCK_SERVICE_URL?: string;
+    /** scry-stock service bearer (secret: `wrangler secret put STOCK_SERVICE_TOKEN`). Never logged. */
+    STOCK_SERVICE_TOKEN?: string;
     GEMINI_API_KEY: string;        // Google Gemini API key for image generation (sent as x-goog-api-key)
     /** Cloudflare AI Gateway root (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>). Unset = direct to the provider (kill switch). */
     LLM_GATEWAY_URL?: string;

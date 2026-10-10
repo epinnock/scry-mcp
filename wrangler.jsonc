@@ -37,6 +37,8 @@
     // the dashboard capture routes have been live in production since the 2026-10-08 joint release).
     // Kill switch: set CAPTURE_TOOLS_ENABLED to "0" (tools off unless exactly "1").
     "CAPTURE_TOOLS_ENABLED": "1",
+    // stock-metasearch: STOCK_TOOLS_ENABLED and STOCK_SERVICE_URL are deliberately NOT set here (search_stock is
+    // absent in production until the feature's Gate B).
     "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
   },
   // Producer only: the consumer is scry-diff-service-production (src/telemetry/delivery.ts).
@@ -111,6 +113,11 @@
         // Snip capture tools (latest/get/list/delete_capture): ON in stage only; production has no
         // CAPTURE_TOOLS_ENABLED until the snip-capture feature's Gate B.
         "CAPTURE_TOOLS_ENABLED": "1",
+        // Stock picture search (feature stock-metasearch): search_stock calls the stage scry-stock Worker over
+        // workers.dev with a signed scry-stock assertion. ON in stage only; production has NO STOCK_TOOLS_ENABLED
+        // until the feature's Gate B (unset = tool absent). Secret: STOCK_SERVICE_TOKEN (wrangler secret put).
+        "STOCK_TOOLS_ENABLED": "1",
+        "STOCK_SERVICE_URL": "https://scry-stock-service-staging.epinnock.workers.dev",
         "SCRY_DASHBOARD_API_URL": "https://dashboard-stage.scrymore.com"
       },
       // Producer only: the consumer is scry-diff-service-staging (src/telemetry/delivery.ts).
