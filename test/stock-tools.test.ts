@@ -76,6 +76,23 @@ interface World {
   lines: LogLine[];
 }
 
+/**
+ * Runs `call` under a faked setTimeout/clearTimeout and moves the fake clock forward in steps until it settles,
+ * so a deadline test needs no real wait and asserts on the outcome (the error code), never on elapsed time.
+ */
+async function settleOnFakeClock<T>(call: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    let settled = false;
+    const pending = call().finally(() => { settled = true; });
+    for (let i = 0; i < 20 && !settled; i++) await vi.advanceTimersByTimeAsync(STOCK_TIMEOUT_MS);
+    expect(settled, "the call must end at the deadline without any real waiting").toBe(true);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 /** Mocks the stock service (`respond`) and PostHog. Collects every log line, console write and PostHog body. */
@@ -513,14 +530,10 @@ describe("guarantee-1 (MCP side): a worker error becomes a fixed tool error with
       c.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
     }));
     await withClient({}, async client => {
-      const t0 = Date.now();
-      const res = asResult(await client.callTool({ name: "search_stock", arguments: { query: "slow" } }, undefined, { timeout: 8000 }));
-      const took = Date.now() - t0;
+      const res = asResult(await settleOnFakeClock(() => client.callTool({ name: "search_stock", arguments: { query: "slow" } }, undefined, { timeout: 8000 })));
       expect(errorOf(res)).toMatchObject({ error: "STOCK_TIMEOUT", retryable: true });
-      expect(took).toBeGreaterThanOrEqual(STOCK_TIMEOUT_MS - 100);
-      expect(took).toBeLessThan(STOCK_TIMEOUT_MS + 1500);
     });
-  }, 15000);
+  });
 
   describe("the response body is capped and keeps the deadline (F31)", () => {
     const CAP = 256 * 1024;
@@ -576,15 +589,33 @@ describe("guarantee-1 (MCP side): a worker error becomes a fixed tool error with
         cancel() { cancelled = true; },
       }), { status: 200, headers: { "content-type": "application/json" } }));
       await withClient({}, async client => {
-        const t0 = Date.now();
-        const res = asResult(await client.callTool({ name: "search_stock", arguments: { query: "slow body" } }, undefined, { timeout: 8000 }));
-        const took = Date.now() - t0;
+        const res = asResult(await settleOnFakeClock(() => client.callTool({ name: "search_stock", arguments: { query: "slow body" } }, undefined, { timeout: 8000 })));
         expect(errorOf(res)).toMatchObject({ error: "STOCK_TIMEOUT", retryable: true });
-        expect(took).toBeGreaterThanOrEqual(STOCK_TIMEOUT_MS - 100);
-        expect(took).toBeLessThan(STOCK_TIMEOUT_MS + 1500);
       });
       expect(cancelled).toBe(true);
-    }, 15000);
+    });
+
+    it("the cap counts bytes, not characters: a multi-byte body under 256K characters but over 256 KB is refused", async () => {
+      const text = "\u00e9\u4e2d\ud83d\ude00".repeat(30_000); // per repeat: 4 UTF-16 characters but 2+3+4 = 9 UTF-8 bytes
+      const body = JSON.stringify({ note: text });
+      expect(body.length).toBeLessThan(CAP); // characters: under the cap
+      expect(enc.encode(body).byteLength).toBeGreaterThan(CAP); // bytes: over it
+      let cancelled = false;
+      const bytes = enc.encode(body);
+      world(() => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let i = 0; i < bytes.length; i += 16 * 1024) controller.enqueue(bytes.subarray(i, i + 16 * 1024));
+          // left open on purpose: the cap, not the end of the stream, must stop the read
+        },
+        cancel() { cancelled = true; },
+      }), { status: 200, headers: { "content-type": "application/json" } })); // no Content-Length: the streaming count decides
+      await withClient({}, async client => {
+        const res = asResult(await search(client, { query: QUERY_CANARY }));
+        expect(res.isError).toBe(true);
+        expect(errorOf(res)).toMatchObject({ error: "STOCK_SERVICE_ERROR", retryable: false });
+      });
+      expect(cancelled).toBe(true);
+    });
   });
 
   it("missing configuration fails closed with SERVER_MISCONFIGURED and makes no call", async () => {

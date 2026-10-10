@@ -30,18 +30,21 @@ export async function readBodyCapped(response: Response, signal: AbortSignal, ma
   }
   if (!response.body) return "";
   const reader = response.body.getReader();
-  let onAbort: (() => void) | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new StockBodyDeadlineError());
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  });
-  deadline.catch(() => undefined); // the race below handles it; avoid an unhandled rejection after a normal finish
+  // One abort listener for the whole read (not one race handler per chunk): on the deadline it cancels the
+  // stream, which settles a pending read() as done, and the loop then reports the deadline.
+  let timedOut = false;
+  const onAbort = () => {
+    timedOut = true;
+    reader.cancel().catch(() => undefined);
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await Promise.race([reader.read(), deadline]);
+      const { done, value } = await reader.read();
+      if (timedOut) throw new StockBodyDeadlineError();
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) throw new StockBodyTooLargeError();
@@ -51,7 +54,7 @@ export async function readBodyCapped(response: Response, signal: AbortSignal, ma
     await reader.cancel().catch(() => undefined);
     throw err;
   } finally {
-    if (onAbort) signal.removeEventListener("abort", onAbort);
+    signal.removeEventListener("abort", onAbort);
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
