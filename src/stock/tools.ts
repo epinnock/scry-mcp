@@ -49,8 +49,8 @@ export function registerStockTools(server: McpServer, ctx: StockToolContext): vo
       description: [
         "Search free stock libraries (Pixabay, Unsplash, Openverse) for photos, illustrations and vectors, for example to suggest hero art, an empty-state illustration or a placeholder photo in a design.",
         "This searches public stock libraries, NOT the user's own Scry screens: for their screenshots and components use search_components.",
-        "Each result has provider, title, creditLine, pageUrl, previewUrl, type and licenseLabel, plus the status of every provider.",
-        "You MUST show the creditLine with every picture you suggest and link to its pageUrl: pictures open on the provider's site, where the user downloads them under the stated licence.",
+        "Each result has provider, title, creditLine, creditParts, pageUrl, providerUrl, previewUrl, type, licenseLabel and licenseUrl, plus the status of every provider and the provider notices.",
+        "You MUST show the creditLine with every picture you suggest, exactly as given in the text result with its links (the same parts are in creditParts), and link to its pageUrl: pictures open on the provider's site, where the user downloads them under the stated licence. Show the provider notices that come with the result, such as the Openverse line (made with Openverse, not endorsed or certified by Openverse).",
         "Do not download, store or re-upload the pictures, and do not use them to train or fine-tune a model.",
         "Nothing is saved in Scry and the search words are not logged.",
         "Errors (JSON {error, message, retryable}): RATE_LIMITED, VALIDATION_ERROR, STOCK_TIMEOUT, STOCK_UNREACHABLE, STOCK_SERVICE_ERROR, STOCK_PROVIDERS_UNAVAILABLE, SERVER_MISCONFIGURED. A failure here never affects Scry's own search.",

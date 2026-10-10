@@ -17,7 +17,24 @@
       "previewWidth": 640,
       "previewHeight": 360,
       "type": "illustration",
-      "licenseLabel": "Pixabay Content License"
+      "licenseLabel": "Pixabay Content License",
+      "creditParts": [
+        {
+          "text": "Image by "
+        },
+        {
+          "text": "Josch13",
+          "href": "https://pixabay.com/users/Josch13-48777/"
+        },
+        {
+          "text": " from "
+        },
+        {
+          "text": "Pixabay",
+          "href": "https://pixabay.com/"
+        }
+      ],
+      "providerUrl": "https://pixabay.com/"
     },
     {
       "provider": "unsplash",
@@ -35,7 +52,24 @@
       "previewWidth": 400,
       "previewHeight": 300,
       "type": "photo",
-      "licenseLabel": "Unsplash License"
+      "licenseLabel": "Unsplash License",
+      "creditParts": [
+        {
+          "text": "Photo by "
+        },
+        {
+          "text": "Jeff Sheldon",
+          "href": "https://unsplash.com/@ugmonk?utm_source=scry&utm_medium=referral"
+        },
+        {
+          "text": " on "
+        },
+        {
+          "text": "Unsplash",
+          "href": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
+        }
+      ],
+      "providerUrl": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
     },
     {
       "provider": "openverse",
@@ -53,7 +87,35 @@
       "previewWidth": 600,
       "previewHeight": 400,
       "type": "photo",
-      "licenseLabel": "CC BY 2.0"
+      "licenseLabel": "CC BY 2.0",
+      "creditParts": [
+        {
+          "text": "\""
+        },
+        {
+          "text": "Empty street",
+          "href": "https://www.flickr.com/photos/12345/67890"
+        },
+        {
+          "text": "\" by "
+        },
+        {
+          "text": "Jane Doe",
+          "href": "https://www.flickr.com/photos/12345"
+        },
+        {
+          "text": " is licensed under "
+        },
+        {
+          "text": "CC BY 2.0",
+          "href": "https://creativecommons.org/licenses/by/2.0/"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "licenseUrl": "https://creativecommons.org/licenses/by/2.0/",
+      "providerUrl": "https://openverse.org/"
     },
     {
       "provider": "pixabay",
@@ -73,7 +135,24 @@
       "previewHeight": 640,
       "type": "vector",
       "licenseLabel": "Pixabay Content License",
-      "isAiGenerated": false
+      "isAiGenerated": false,
+      "creditParts": [
+        {
+          "text": "Image by "
+        },
+        {
+          "text": "Jane Doe",
+          "href": "https://pixabay.com/users/Jane%20Doe-1234/"
+        },
+        {
+          "text": " from "
+        },
+        {
+          "text": "Pixabay",
+          "href": "https://pixabay.com/"
+        }
+      ],
+      "providerUrl": "https://pixabay.com/"
     },
     {
       "provider": "unsplash",
@@ -88,7 +167,24 @@
       "previewWidth": 400,
       "previewHeight": 600,
       "type": "photo",
-      "licenseLabel": "Unsplash License"
+      "licenseLabel": "Unsplash License",
+      "creditParts": [
+        {
+          "text": "Photo by "
+        },
+        {
+          "text": "abstractfan",
+          "href": "https://unsplash.com/@abstractfan?utm_source=scry&utm_medium=referral"
+        },
+        {
+          "text": " on "
+        },
+        {
+          "text": "Unsplash",
+          "href": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
+        }
+      ],
+      "providerUrl": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
     },
     {
       "provider": "openverse",
@@ -105,7 +201,35 @@
       "previewWidth": 500,
       "previewHeight": 500,
       "type": "illustration",
-      "licenseLabel": "CC0 1.0"
+      "licenseLabel": "CC0 1.0",
+      "creditParts": [
+        {
+          "text": "\""
+        },
+        {
+          "text": "Line drawing of a box",
+          "href": "https://commons.wikimedia.org/wiki/File:Box.svg"
+        },
+        {
+          "text": "\" by "
+        },
+        {
+          "text": "Wiki User",
+          "href": "https://commons.wikimedia.org/wiki/User:WikiUser"
+        },
+        {
+          "text": " is marked with "
+        },
+        {
+          "text": "CC0 1.0",
+          "href": "https://creativecommons.org/publicdomain/zero/1.0/"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "providerUrl": "https://openverse.org/"
     }
   ],
   "providers": {

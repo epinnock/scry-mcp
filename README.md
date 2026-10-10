@@ -95,8 +95,13 @@ Unsplash, Openverse; Pexels when the service enables it) through the `scry-stock
 (`STOCK_SERVICE_URL`, secret `STOCK_SERVICE_TOKEN`). The call carries the service bearer, a 60-second
 `X-Scry-Caller` assertion with audience `scry-stock` (signed with `SCRY_CALLER_ASSERTION_SECRET`, the secret
 the stock Worker verifies) and the call's request id, and is abandoned after 3 s. Each result has `provider`,
-`title`, `creditLine`, `pageUrl`, `previewUrl`, `type` and `licenseLabel`, plus a status per provider; the tool
-description tells the agent to show the credit line and to open pictures on the provider's site. Nothing is
+`title`, `creditLine`, `creditParts` (the credit as ordered `{text, href?}` parts), `pageUrl`, `providerUrl`,
+`previewUrl`, `type`, `licenseLabel` and `licenseUrl`, plus a status per provider. The text output prints the
+credit as markdown with its links (Unsplash photographer and Unsplash links carry the `utm_source=scry` pair), the
+licence as a link when the service gives a deed URL, a `Sources:` line, and the provider notices the terms
+require (Openverse: "made with Openverse, not endorsed or certified by Openverse"; Pexels: "Photos provided by
+Pexels"); the same notices are in `structuredContent.notices`. The tool description tells the agent to show the
+credit exactly as given, links included, and to open pictures on the provider's site. Nothing is
 stored, and the query is never logged: it travels only in the POST body, and the tool does not get the injected
 analytics `context` / `conversation_id` arguments (`NO_AGENT_ARGS_TOOLS`). Staging only; production sets neither
 variable, so the tool is absent there until the feature's Gate B. Source: `src/stock/`.
