@@ -293,6 +293,12 @@ export const STOCK_BAD_RESPONSE_FAILURE: StockFailure = {
   retryable: true,
 };
 
+export const STOCK_TOO_LARGE_FAILURE: StockFailure = {
+  code: "STOCK_SERVICE_ERROR",
+  message: "The stock service sent an answer larger than this server accepts (256 KB), so it was dropped. Scry's own search is unaffected. Try a narrower search.",
+  retryable: false,
+};
+
 export const STOCK_NO_PROVIDER_FAILURE: StockFailure = {
   code: "STOCK_PROVIDERS_UNAVAILABLE",
   message: "No stock provider answered (each timed out, hit its budget or is switched off). Scry's own search is unaffected. Retry later.",

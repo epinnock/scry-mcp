@@ -28,11 +28,13 @@ import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { CAPTURE_WRITE_RATE_LIMIT_RPM } from "./captures/constants";
 import { registerCaptureTools } from "./captures/tools";
 import { registerStockTools } from "./stock/tools";
+import { StockBodyDeadlineError, StockBodyTooLargeError, readBodyCapped } from "./stock/body";
 import {
   STOCK_BAD_RESPONSE_FAILURE,
   STOCK_MISCONFIGURED_FAILURE,
   STOCK_TIMEOUT_FAILURE,
   STOCK_TIMEOUT_MS,
+  STOCK_TOO_LARGE_FAILURE,
   STOCK_UNREACHABLE_FAILURE,
   mapStockError,
   normaliseResponse,
@@ -739,35 +741,47 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       this.logDiagnostic("callStockAPI", { error: "assertion", success: false });
       return { ok: false, failure: STOCK_MISCONFIGURED_FAILURE };
     }
+    // One deadline covers the request AND the body read: fetchWithTimeout clears its timer once the headers
+    // arrive, which would leave a stalled body unbounded (F31).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), STOCK_TIMEOUT_MS);
     let response: Response;
+    let raw: string;
     try {
-      response = await this.fetchWithTimeout(
-        `${baseUrl}/v1/search`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-            [CALLER_ASSERTION_HEADER]: assertion,
-            ...requestIdHeaders(),
-          },
-          body: JSON.stringify(body),
+      response = await fetch(`${baseUrl}/v1/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          [CALLER_ASSERTION_HEADER]: assertion,
+          ...requestIdHeaders(),
         },
-        STOCK_TIMEOUT_MS,
-      );
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        clearTimeout(timer);
+        this.logDiagnostic("callStockAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
+        return { ok: false, failure: mapStockError(response.status, response.headers.get("Retry-After")) };
+      }
+      raw = await readBodyCapped(response, controller.signal);
     } catch (err) {
-      const timeout = err instanceof Error && err.name === "AbortError";
+      controller.abort(); // release the connection on any failure
+      if (err instanceof StockBodyTooLargeError) {
+        this.logDiagnostic("callStockAPI", { error: "body_too_large", latencyMs: Date.now() - start, success: false });
+        return { ok: false, failure: STOCK_TOO_LARGE_FAILURE };
+      }
+      const timeout = err instanceof StockBodyDeadlineError || (err instanceof Error && err.name === "AbortError");
       // Fixed words only: a fetch error text is not logged.
       this.logDiagnostic("callStockAPI", { error: timeout ? "timeout" : "unreachable", latencyMs: Date.now() - start, success: false });
       return { ok: false, failure: timeout ? STOCK_TIMEOUT_FAILURE : STOCK_UNREACHABLE_FAILURE };
-    }
-    if (!response.ok) {
-      this.logDiagnostic("callStockAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
-      return { ok: false, failure: mapStockError(response.status, response.headers.get("Retry-After")) };
+    } finally {
+      clearTimeout(timer);
     }
     let result: StockResult | null = null;
     try {
-      result = normaliseResponse(await response.json());
+      result = normaliseResponse(JSON.parse(raw));
     } catch {
       result = null;
     }
