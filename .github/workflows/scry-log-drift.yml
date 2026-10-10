@@ -1,0 +1,42 @@
+name: scry-log-drift
+
+# Is the vendored src/lib/scry-log ahead of the stage logs Worker? Fails with "deploy logs-service first" when it is,
+# warns when it is behind, passes with a warning when /healthz cannot be read. See scripts/scry-log-drift.sh.
+# Drafts skip it (ready_for_review gives the first run), like the other workflows in this repo.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, stage]
+    paths:
+      - 'src/lib/scry-log/**'
+      - 'scripts/scry-log-*'
+      - 'scripts/tests/scry-log-drift-test.sh'
+      - '.github/workflows/scry-log-drift.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: scry-log-drift-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: scry-log-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Only the TypeScript compiler is needed (it transpiles the vendored files); no project install.
+      - name: Install typescript
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ts" --no-package-lock --ignore-scripts typescript@5
+          echo "NODE_PATH=$RUNNER_TEMP/ts/node_modules" >> "$GITHUB_ENV"
+      - run: bash scripts/tests/scry-log-drift-test.sh
+      - run: bash scripts/scry-log-drift.sh

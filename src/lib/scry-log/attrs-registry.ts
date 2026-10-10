@@ -32,6 +32,9 @@ export const MAX_ATTRS_BYTES = 2048;
 export const MAX_LIST_ITEMS = 32;
 
 const MCP: ReadonlyArray<Service> = ['mcp'];
+const SEARCH: ReadonlyArray<Service> = ['search'];
+const BUILD: ReadonlyArray<Service> = ['build'];
+const LOGS: ReadonlyArray<Service> = ['logs'];
 
 export const ATTRS: Readonly<Record<string, AttrDef>> = {
   // --- mcp (feature mcp-analytics): one mcp_tool_call line per tool call; see scry-mcp src/analytics/event.ts ---
@@ -49,4 +52,33 @@ export const ATTRS: Readonly<Record<string, AttrDef>> = {
   'mcp.missing_capability': { type: 'bool', services: MCP, description: 'The agent called get_more_tools: it wanted a capability Scry lacks' },
   'mcp.server_build': { type: 'token', max: 64, services: MCP, description: 'Deployed server build (commit sha or version)' },
   'mcp.tool_count': { type: 'int', max: 10000, services: MCP, description: 'Number of tools returned by tools/list' },
+  // --- search (feature search-speedup F22 + phase 2 hedge): the `search embed` line; enums, flags and counts only ---
+  'search.embed_mode': { type: 'token', max: 8, pattern: /^(?:text|image|both|none)$/, services: SEARCH, description: 'Which embeddings the search used: text, image, both or none (keyword only)' },
+  'search.hedged': { type: 'bool', services: SEARCH, description: 'A second identical text-embed request was sent because the first was slow (hedge)' },
+  'search.warm_steps': { type: 'token_list', max: 40, services: SEARCH, description: 'Warm-up run steps as step:outcome tokens (firestore:ok, embed:ok, zilliz:ok, caches:skipped_needs_user)' },
+  'search.hedge_winner': { type: 'int', max: 2, services: SEARCH, description: 'Which hedged text-embed request answered first: 1 = the original, 2 = the hedge' },
+  // --- search (feature search-speedup preheat Step 0): the `search session` line; milliseconds and an opaque instance id only ---
+  'search.auth_ms': { type: 'int', max: 600000, services: SEARCH, description: 'Milliseconds spent verifying the Firebase ID token' },
+  'search.limit_ms': { type: 'int', max: 600000, services: SEARCH, description: 'Milliseconds spent in the rate limiter' },
+  'search.access_ms': { type: 'int', max: 600000, services: SEARCH, description: 'Milliseconds spent on the fresh project access read' },
+  'search.gate_ms': { type: 'int', max: 600000, services: SEARCH, description: 'Milliseconds spent on the wallet and balance gate (its own duration, also when it ran beside the access read)' },
+  'search.inst': { type: 'token', max: 8, pattern: /^[0-9a-f]{8}$/, services: SEARCH, description: 'Opaque random id of the function instance that answered (8 hex, new per instance start); never a host, user or request value' },
+  'search.inst_age_ms': { type: 'int', max: 604800000, services: SEARCH, description: 'Milliseconds since that instance loaded the route (small = a fresh instance)' },
+  // --- build (feature search-speedup P2-3): search thumbnails (`<key>.thumb.webp`), from the BPS writer and the backfill job ---
+  'thumb.outcome': { type: 'token', max: 8, pattern: /^(?:written|skipped|failed)$/, services: BUILD, description: 'Result of one thumbnail: written, skipped (already there / unsupported) or failed' },
+  'thumb.source': { type: 'token', max: 8, pattern: /^(?:worker|backfill)$/, services: BUILD, description: 'Who made the thumbnail: the BPS Worker at index time, or the backfill job' },
+  'thumb.mode': { type: 'token', max: 8, pattern: /^(?:dry-run|apply)$/, services: BUILD, description: 'Backfill run mode' },
+  // --- logs (feature log-core-hardening S1): the store's own /query request line; enums and a count only, never an id or a filter ---
+  'logs.mode': { type: 'token', max: 8, pattern: /^(?:index|scan)$/, services: LOGS, description: 'How a /query was answered: from the request-id index, or by listing and reading R2 (scan)' },
+  'logs.stopped': { type: 'token', max: 8, pattern: /^(?:page|objects|bytes|time|listing)$/, services: LOGS, description: 'Why a /query stopped before the whole window: page (limit reached), objects, bytes, time or listing budget; absent when the scan was complete' },
+  'logs.scanned': { type: 'int', max: 100000, services: LOGS, description: 'R2 objects a /query opened' },
+  'thumb.bytes_in': { type: 'int', services: BUILD, description: 'Original image size in bytes (sum for a batch or run)' },
+  'thumb.bytes_out': { type: 'int', services: BUILD, description: 'Thumbnail size in bytes (sum for a batch or run)' },
+  'thumb.planned': { type: 'int', services: BUILD, description: 'Backfill: screenshots still missing a thumbnail when the run started' },
+  'thumb.written': { type: 'int', services: BUILD, description: 'Backfill: thumbnails written (batch or run total)' },
+  'thumb.skipped': { type: 'int', services: BUILD, description: 'Backfill: screenshots skipped (already had a thumbnail, or over the pixel cap)' },
+  'thumb.failed': { type: 'int', services: BUILD, description: 'Backfill: thumbnails that failed (batch or run total)' },
+  'thumb.p50_kb_in': { type: 'int', services: BUILD, description: 'Backfill: median original size in KB for the batch or run' },
+  'thumb.p50_kb_out': { type: 'int', services: BUILD, description: 'Backfill: median thumbnail size in KB for the batch or run' },
+  'thumb.log_post_fail': { type: 'int', services: BUILD, description: 'Backfill: log requests that failed so far (the run continues)' },
 };

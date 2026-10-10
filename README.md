@@ -526,3 +526,7 @@ Claude Desktop        mcp-remote          Worker              Firebase
 | `npm run test:e2e` | Run E2E tests (needs dev server) |
 | `npm run test:coverage` | Tests with coverage report |
 | `npm run verify` | Full check: typecheck + lint + tests |
+
+## Log schema drift check
+
+The `scry-log-drift` workflow (`scripts/scry-log-drift.sh`) fails a PR whose vendored `src/lib/scry-log` is ahead of the stage logs Worker ("deploy logs-service first"); re-vendor with `scry-management/lib/scry-log/sync.sh <this repo>`.
