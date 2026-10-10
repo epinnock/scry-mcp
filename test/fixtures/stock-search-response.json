@@ -12,6 +12,24 @@
       "creator": "Josch13",
       "creatorUrl": "https://pixabay.com/users/Josch13-48777/",
       "creditLine": "Image by Josch13 from Pixabay",
+      "creditParts": [
+        {
+          "text": "Image by "
+        },
+        {
+          "text": "Josch13",
+          "href": "https://pixabay.com/users/Josch13-48777/"
+        },
+        {
+          "text": " from "
+        },
+        {
+          "text": "Pixabay",
+          "href": "https://pixabay.com/"
+        }
+      ],
+      "providerUrl": "https://pixabay.com/",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
       "pageUrl": "https://pixabay.com/illustrations/blossom-bloom-flower-195893/",
       "previewUrl": "https://pixabay.com/get/g1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f70_640.jpg",
       "previewWidth": 640,
@@ -30,6 +48,24 @@
       "creator": "Jeff Sheldon",
       "creatorUrl": "https://unsplash.com/@ugmonk?utm_source=scry&utm_medium=referral",
       "creditLine": "Photo by Jeff Sheldon on Unsplash",
+      "creditParts": [
+        {
+          "text": "Photo by "
+        },
+        {
+          "text": "Jeff Sheldon",
+          "href": "https://unsplash.com/@ugmonk?utm_source=scry&utm_medium=referral"
+        },
+        {
+          "text": " on "
+        },
+        {
+          "text": "Unsplash",
+          "href": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
+        }
+      ],
+      "providerUrl": "https://unsplash.com/?utm_source=scry&utm_medium=referral",
+      "licenseUrl": "https://unsplash.com/license?utm_source=scry&utm_medium=referral",
       "pageUrl": "https://unsplash.com/photos/eOLpJytrbsQ?utm_source=scry&utm_medium=referral",
       "previewUrl": "https://images.unsplash.com/photo-1?w=400&fit=max",
       "previewWidth": 400,
@@ -47,7 +83,39 @@
       ],
       "creator": "Jane Doe",
       "creatorUrl": "https://www.flickr.com/photos/12345",
-      "creditLine": "\"Empty street\" by Jane Doe is licensed under CC BY 2.0.",
+      "creditLine": "\"Empty street\" by Jane Doe is licensed under CC BY 2.0. To view a copy of this license, visit https://creativecommons.org/licenses/by/2.0/.",
+      "creditParts": [
+        {
+          "text": "\"Empty street\"",
+          "href": "https://www.flickr.com/photos/12345/67890"
+        },
+        {
+          "text": " by "
+        },
+        {
+          "text": "Jane Doe",
+          "href": "https://www.flickr.com/photos/12345"
+        },
+        {
+          "text": " is licensed under "
+        },
+        {
+          "text": "CC BY 2.0",
+          "href": "https://creativecommons.org/licenses/by/2.0/"
+        },
+        {
+          "text": ". To view a copy of this license, visit "
+        },
+        {
+          "text": "https://creativecommons.org/licenses/by/2.0/",
+          "href": "https://creativecommons.org/licenses/by/2.0/"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "providerUrl": "https://openverse.org/",
+      "licenseUrl": "https://creativecommons.org/licenses/by/2.0/",
       "pageUrl": "https://www.flickr.com/photos/12345/67890",
       "previewUrl": "https://api.openverse.org/v1/images/4bbfe191-1cca-4a9b-9dd8-7cd2a6b2c5a4/thumb/",
       "previewWidth": 600,
@@ -67,6 +135,24 @@
       "creator": "Jane Doe",
       "creatorUrl": "https://pixabay.com/users/Jane%20Doe-1234/",
       "creditLine": "Image by Jane Doe from Pixabay",
+      "creditParts": [
+        {
+          "text": "Image by "
+        },
+        {
+          "text": "Jane Doe",
+          "href": "https://pixabay.com/users/Jane%20Doe-1234/"
+        },
+        {
+          "text": " from "
+        },
+        {
+          "text": "Pixabay",
+          "href": "https://pixabay.com/"
+        }
+      ],
+      "providerUrl": "https://pixabay.com/",
+      "licenseUrl": "https://pixabay.com/service/license-summary/",
       "pageUrl": "https://pixabay.com/vectors/empty-state-box-2345678/",
       "previewUrl": "https://pixabay.com/get/gaabbccddeeff00112233445566778899aabbccddeeff00112233445566778899_640.png",
       "previewWidth": 640,
@@ -83,6 +169,24 @@
       "creator": "abstractfan",
       "creatorUrl": "https://unsplash.com/@abstractfan?utm_source=scry&utm_medium=referral",
       "creditLine": "Photo by abstractfan on Unsplash",
+      "creditParts": [
+        {
+          "text": "Photo by "
+        },
+        {
+          "text": "abstractfan",
+          "href": "https://unsplash.com/@abstractfan?utm_source=scry&utm_medium=referral"
+        },
+        {
+          "text": " on "
+        },
+        {
+          "text": "Unsplash",
+          "href": "https://unsplash.com/?utm_source=scry&utm_medium=referral"
+        }
+      ],
+      "providerUrl": "https://unsplash.com/?utm_source=scry&utm_medium=referral",
+      "licenseUrl": "https://unsplash.com/license?utm_source=scry&utm_medium=referral",
       "pageUrl": "https://unsplash.com/photos/Xq9d3kLmZ0w?utm_source=scry&utm_medium=referral",
       "previewUrl": "https://images.unsplash.com/photo-2?w=400&fit=max",
       "previewWidth": 400,
@@ -99,7 +203,39 @@
       ],
       "creator": "Wiki User",
       "creatorUrl": "https://commons.wikimedia.org/wiki/User:WikiUser",
-      "creditLine": "\"Line drawing of a box\" by Wiki User is marked with CC0 1.0.",
+      "creditLine": "\"Line drawing of a box\" by Wiki User is marked with CC0 1.0. To view the terms, visit https://creativecommons.org/publicdomain/zero/1.0/.",
+      "creditParts": [
+        {
+          "text": "\"Line drawing of a box\"",
+          "href": "https://commons.wikimedia.org/wiki/File:Box.svg"
+        },
+        {
+          "text": " by "
+        },
+        {
+          "text": "Wiki User",
+          "href": "https://commons.wikimedia.org/wiki/User:WikiUser"
+        },
+        {
+          "text": " is marked with "
+        },
+        {
+          "text": "CC0 1.0",
+          "href": "https://creativecommons.org/publicdomain/zero/1.0/"
+        },
+        {
+          "text": ". To view the terms, visit "
+        },
+        {
+          "text": "https://creativecommons.org/publicdomain/zero/1.0/",
+          "href": "https://creativecommons.org/publicdomain/zero/1.0/"
+        },
+        {
+          "text": "."
+        }
+      ],
+      "providerUrl": "https://openverse.org/",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
       "pageUrl": "https://commons.wikimedia.org/wiki/File:Box.svg",
       "previewUrl": "https://api.openverse.org/v1/images/0a1b2c3d-1111-4222-8333-444455556666/thumb/",
       "previewWidth": 500,
