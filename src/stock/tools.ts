@@ -59,7 +59,7 @@ export function registerStockTools(server: McpServer, ctx: StockToolContext): vo
         query: z.string().trim().min(1).max(STOCK_MAX_QUERY_LENGTH).describe("What to look for, 1-200 characters, for example \"empty state illustration\" or \"dashboard hero photo\"."),
         type: z.enum(STOCK_TYPES).optional().describe("Restrict to photo, illustration or vector."),
         provider: z.enum(STOCK_PROVIDERS).optional().describe("Search one provider only. Default: all enabled providers."),
-        limit: z.number().int().min(1).max(STOCK_MAX_LIMIT).optional().describe(`Maximum results, 1-${STOCK_MAX_LIMIT} (default ${STOCK_DEFAULT_LIMIT}).`),
+        limit: z.number().int().min(1).max(STOCK_MAX_LIMIT).optional().describe(`Target number of results, 1-${STOCK_MAX_LIMIT} (default ${STOCK_DEFAULT_LIMIT}); each provider returns at least 3, so you may get more.`),
       },
       annotations: { title: "Search free stock pictures", readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: true },
     },
