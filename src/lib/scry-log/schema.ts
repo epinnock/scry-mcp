@@ -6,7 +6,7 @@ export const SCHEMA_VERSION = 1 as const;
 export const MAX_STRING = 256;
 
 export const LEVELS = ['info', 'warn', 'error', 'debug'] as const;
-export const SERVICES = ['diff', 'mcp', 'upload', 'build', 'cdn', 'dashboard', 'search', 'logs', 'plugin', 'cli', 'uat-inbox'] as const;
+export const SERVICES = ['diff', 'mcp', 'upload', 'build', 'cdn', 'dashboard', 'search', 'stock', 'logs', 'plugin', 'cli', 'uat-inbox'] as const;
 export const ENVS = ['production', 'staging', 'development'] as const;
 
 export type Level = (typeof LEVELS)[number];
@@ -50,6 +50,11 @@ export interface LogLine {
   truncated_bytes?: number;
   /** search request/done lines (custom-metadata): how many tags the request filtered on; never a tag value. */
   tagFilterCount?: number;
+  /** story.read lines (story-page-404-legacy-rows): how the story's rows were found, `stored` or `derived` (the sid fallback); a closed lowercase code. */
+  keySource?: string;
+  /** story.read lines (story-page-404-legacy-rows): collections whose sid read hit the row cap, and json_content strings that failed to parse; counts only, left out when zero. */
+  fallbackCapped?: number;
+  jsonParseFailures?: number;
   /** search request line (dashboard-all-projects-search): size of the caller's readable set, public projects left out by the ceiling, read time in ms. */
   readable_projects?: number;
   readable_left_out?: number;
@@ -58,6 +63,8 @@ export interface LogLine {
   readable_dropped?: number;
   /** search done line and `search embed fallback` warn (gemini-embed-no-fallback): why the dense leg was dropped, a closed lowercase code (timeout, rate_limited, unauthorized, provider_error). */
   fallback?: string;
+  /** search done line (search-speedup): whether the Zilliz client was built for this request or reused from the warm instance. Closed enum, see ENUM_VALUES; anything else is DROPPED. */
+  zilliz_client?: 'new' | 'reused';
   /** Registered, typed attributes (src/attrs-registry.ts). Additive to v1: unregistered or invalid ones are dropped and counted in attrs_drop. */
   attrs?: LogAttrs;
   /** Number of attributes (and list items) dropped from `attrs` by the producer or the store. */
@@ -65,8 +72,8 @@ export interface LogLine {
 }
 
 export const REQUIRED_KEYS = ['v', 'ts', 'level', 'service', 'env', 'msg'] as const;
-export const OPTIONAL_STRING_KEYS = ['version', 'request_id', 'route', 'project', 'run_id', 'build_id', 'uid_hash', 'err_code', 'client', 'step', 'outcome', 'reason', 'sourceType', 'fallback'] as const;
-export const OPTIONAL_NUMBER_KEYS = ['status', 'ms', 'log_drop', 'attempt', 'chunk', 'chunks_total', 'stories', 'with_tags', 'with_fields', 'dropped_tags', 'dropped_fields', 'truncated_bytes', 'tagFilterCount', 'readable_projects', 'readable_left_out', 'readable_ms', 'readable_dropped', 'attrs_drop'] as const;
+export const OPTIONAL_STRING_KEYS = ['version', 'request_id', 'route', 'project', 'run_id', 'build_id', 'uid_hash', 'err_code', 'client', 'step', 'outcome', 'reason', 'sourceType', 'fallback', 'zilliz_client', 'keySource'] as const;
+export const OPTIONAL_NUMBER_KEYS = ['status', 'ms', 'log_drop', 'attempt', 'chunk', 'chunks_total', 'stories', 'with_tags', 'with_fields', 'dropped_tags', 'dropped_fields', 'truncated_bytes', 'tagFilterCount', 'readable_projects', 'readable_left_out', 'readable_ms', 'readable_dropped', 'attrs_drop', 'fallbackCapped', 'jsonParseFailures'] as const;
 export const ALLOWED_KEYS: ReadonlyArray<string> = [...REQUIRED_KEYS, ...OPTIONAL_STRING_KEYS, ...OPTIONAL_NUMBER_KEYS, 'attrs'];
 
 /** Ids that may appear in a line: path-safe, bounded (ULID, uuid, project ids). */
@@ -83,8 +90,8 @@ export const ERR_CODE_MAX = 48;
 /** No word in msg (space-separated) and no `_`/`.` part of err_code may be longer than this: keeps tokens out. */
 export const WORD_MAX = 20;
 export const INVALID = '[invalid]';
-// step, outcome, sourceType and fallback are closed enums written as lowercase codes: they use the err_code shape.
-const FIXED_KEYS = new Set(['msg', 'err_code', 'step', 'outcome', 'sourceType', 'fallback']);
+// step, outcome, sourceType, keySource and fallback are closed enums written as lowercase codes: they use the err_code shape.
+const FIXED_KEYS = new Set(['msg', 'err_code', 'step', 'outcome', 'sourceType', 'keySource', 'fallback']);
 
 let invalidCount = 0;
 /** Number of msg/err_code values replaced by [invalid] since the last call (process-wide); resets to 0. */
@@ -152,6 +159,9 @@ function isIdentifier(k: string, val: string): boolean {
   return SHAPE_ID_KEYS.has(k) && val.length <= 40 && IDENTIFIER_SHAPE.test(val) && !ALL_DIGITS.test(val);
 }
 
+/** Closed enums: the value must be exactly one of these, otherwise the key is DROPPED (no [invalid], not a validity failure of the line). */
+export const ENUM_VALUES: Readonly<Record<string, ReadonlyArray<string>>> = { zilliz_client: ['new', 'reused'] };
+
 /** Producers allowed to label themselves in `client` (header x-scry-client is client-controlled, so the store enforces this). */
 export const CLIENT_NAMES: ReadonlyArray<string> = ['scry-link', 'scry-deployer', 'scry-sbcov', 'scry-mcp', 'scry-cli', 'scry-dashboard'];
 export const CLIENT_VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:-[0-9A-Za-z.]{1,16})?$/;
@@ -217,6 +227,10 @@ function validateLineUnsafe(line: unknown): ValidationResult {
       continue;
     }
     if (k === 'version' && VERSION_SHAPE.test(val)) continue;
+    if (ENUM_VALUES[k]) {
+      if (!ENUM_VALUES[k].includes(val)) errors.push(`${k} must be one of ${ENUM_VALUES[k].join(', ')}`);
+      continue;
+    }
     if (k === 'client') {
       if (!isClient(val)) errors.push('client must be <allow-listed name>/<x.y.z>');
       continue;
@@ -288,6 +302,10 @@ function sanitizeLineUnsafe(input: unknown): LogLine | null {
     }
     if (k === 'version' && VERSION_SHAPE.test(val)) {
       out[k] = val;
+      continue;
+    }
+    if (ENUM_VALUES[k]) {
+      if (ENUM_VALUES[k].includes(val)) out[k] = val;
       continue;
     }
     // client and project are client-controlled upstream: strict shape or DROPPED (no [invalid], not a validity failure).
