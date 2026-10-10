@@ -38,6 +38,13 @@ export const CALLER_ASSERTION_TTL_S = 60;
  */
 export const DASHBOARD_AGENT_AUDIENCE = "scry-dashboard-agent";
 
+/**
+ * Audience for the MCP -> stock service hop (feature stock-metasearch, `search_stock`). The stock Worker
+ * verifies it with the same SCRY_CALLER_ASSERTION_SECRET as the search API; the distinct audience stops an
+ * assertion minted for search from being replayed at the stock service and the other way round.
+ */
+export const STOCK_AUDIENCE = "scry-stock";
+
 export interface AssertionOptions {
   /** Defaults to the search audience. */
   audience?: string;

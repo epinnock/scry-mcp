@@ -22,11 +22,23 @@ import {
 } from "./utils/version-info.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
-import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE } from "./utils/caller-assertion.js";
+import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE, STOCK_AUDIENCE } from "./utils/caller-assertion.js";
 import { DashboardAgentClient, SlidingWindowLimiter, agentClientLabel } from "./issues/client";
 import { ISSUE_WRITE_RATE_LIMIT_RPM, registerIssueTools } from "./issues/tools";
 import { CAPTURE_WRITE_RATE_LIMIT_RPM } from "./captures/constants";
 import { registerCaptureTools } from "./captures/tools";
+import { registerStockTools } from "./stock/tools";
+import {
+  STOCK_BAD_RESPONSE_FAILURE,
+  STOCK_MISCONFIGURED_FAILURE,
+  STOCK_TIMEOUT_FAILURE,
+  STOCK_TIMEOUT_MS,
+  STOCK_UNREACHABLE_FAILURE,
+  mapStockError,
+  normaliseResponse,
+  type StockFailure,
+  type StockResult,
+} from "./stock/format";
 import { searchApiHeaders } from "./search-api-headers";
 import { LlmGatewayConfigError, llmRoute } from "./llm-gateway";
 import { buildImageSpans, r2Ref, type GeminiUsage, type ImageCallTrace } from "./telemetry/image-trace";
@@ -194,6 +206,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
 
   // --- Issue tools (feature issue-resolution): MCP → dashboard /api/agent/issues/* ---
   private dashboardAssertion = new CallerAssertionCache({ audience: DASHBOARD_AGENT_AUDIENCE });
+  // stock-metasearch: aud "scry-stock", signed with the same secret the stock Worker verifies (the search one).
+  private stockAssertion = new CallerAssertionCache({ audience: STOCK_AUDIENCE });
   private issueWriteLimiter = new SlidingWindowLimiter(ISSUE_WRITE_RATE_LIMIT_RPM);
   private captureWriteLimiter = new SlidingWindowLimiter(CAPTURE_WRITE_RATE_LIMIT_RPM);
 
@@ -702,6 +716,67 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     } catch (err) {
       this.logDiagnostic("credits", { requestId, op: "release", error: String(err) });
     }
+  }
+
+  /**
+   * Call the stock service (feature stock-metasearch), modelled on callSearchAPI: service bearer, a signed
+   * `scry-stock` caller assertion for the MCP user, the request id forwarded, a short overall timeout.
+   * Never throws. Never puts the query, the bearer, a header or the response body in a log line or an error
+   * message (G1, G7): failures map to fixed text per status.
+   */
+  private async callStockAPI(body: Record<string, unknown>): Promise<{ ok: true; result: StockResult } | { ok: false; failure: StockFailure }> {
+    const start = Date.now();
+    const baseUrl = this.env.STOCK_SERVICE_URL?.trim().replace(/\/$/, "");
+    const token = this.env.STOCK_SERVICE_TOKEN;
+    if (!baseUrl || !token) {
+      this.logDiagnostic("callStockAPI", { error: "not_configured", success: false });
+      return { ok: false, failure: STOCK_MISCONFIGURED_FAILURE };
+    }
+    let assertion: string;
+    try {
+      assertion = await this.stockAssertion.get(this.env.SCRY_CALLER_ASSERTION_SECRET, this.props.firebaseUid);
+    } catch {
+      this.logDiagnostic("callStockAPI", { error: "assertion", success: false });
+      return { ok: false, failure: STOCK_MISCONFIGURED_FAILURE };
+    }
+    let response: Response;
+    try {
+      response = await this.fetchWithTimeout(
+        `${baseUrl}/v1/search`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            [CALLER_ASSERTION_HEADER]: assertion,
+            ...requestIdHeaders(),
+          },
+          body: JSON.stringify(body),
+        },
+        STOCK_TIMEOUT_MS,
+      );
+    } catch (err) {
+      const timeout = err instanceof Error && err.name === "AbortError";
+      // Fixed words only: a fetch error text is not logged.
+      this.logDiagnostic("callStockAPI", { error: timeout ? "timeout" : "unreachable", latencyMs: Date.now() - start, success: false });
+      return { ok: false, failure: timeout ? STOCK_TIMEOUT_FAILURE : STOCK_UNREACHABLE_FAILURE };
+    }
+    if (!response.ok) {
+      this.logDiagnostic("callStockAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
+      return { ok: false, failure: mapStockError(response.status, response.headers.get("Retry-After")) };
+    }
+    let result: StockResult | null = null;
+    try {
+      result = normaliseResponse(await response.json());
+    } catch {
+      result = null;
+    }
+    if (!result) {
+      this.logDiagnostic("callStockAPI", { status: response.status, latencyMs: Date.now() - start, success: false });
+      return { ok: false, failure: STOCK_BAD_RESPONSE_FAILURE };
+    }
+    this.logDiagnostic("callStockAPI", { resultCount: result.items.length, latencyMs: Date.now() - start, success: true });
+    return { ok: true, result };
   }
 
   /** Helper to call the Scry search API and return both text content and structuredContent for widgets */
@@ -1639,6 +1714,17 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         checkRateLimit: () => this.checkRateLimit(),
         writeLimiter: this.captureWriteLimiter,
         log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
+      });
+    }
+
+    // --- Stock picture search (feature stock-metasearch): search_stock over the scry-stock Worker ---
+    // Off unless STOCK_TOOLS_ENABLED="1" (stage only; production unset until the feature's Gate B). Kill switch:
+    // unset or any other value. The query is never logged (tool-request.ts NO_AGENT_ARGS_TOOLS, G7).
+    if (this.env.STOCK_TOOLS_ENABLED === "1") {
+      registerStockTools(this.server, {
+        call: body => this.callStockAPI(body),
+        checkRateLimit: () => this.checkRateLimit(),
+        log: (tool, data) => this.log(tool, data),
       });
     }
 

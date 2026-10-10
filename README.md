@@ -88,6 +88,23 @@ not see are byte-identical), `CAPTURE_NOT_OWNER` (delete), plus the generic `RAT
 `SERVER_MISCONFIGURED`, `TIMEOUT`, `DASHBOARD_UNREACHABLE`. The note a user typed is returned
 quoted and labelled as untrusted data. No log line carries a capture id, note, app name or URL.
 
+### Stock picture search (stage; `STOCK_TOOLS_ENABLED="1"`)
+
+One tool, `search_stock(query, type?, provider?, limit?)`: a live search of free stock libraries (Pixabay,
+Unsplash, Openverse; Pexels when the service enables it) through the `scry-stock` Worker
+(`STOCK_SERVICE_URL`, secret `STOCK_SERVICE_TOKEN`). The call carries the service bearer, a 60-second
+`X-Scry-Caller` assertion with audience `scry-stock` (signed with `SCRY_CALLER_ASSERTION_SECRET`, the secret
+the stock Worker verifies) and the call's request id, and is abandoned after 3 s. Each result has `provider`,
+`title`, `creditLine`, `pageUrl`, `previewUrl`, `type` and `licenseLabel`, plus a status per provider; the tool
+description tells the agent to show the credit line and to open pictures on the provider's site. Nothing is
+stored, and the query is never logged: it travels only in the POST body, and the tool does not get the injected
+analytics `context` / `conversation_id` arguments (`NO_AGENT_ARGS_TOOLS`). Staging only; production sets neither
+variable, so the tool is absent there until the feature's Gate B. Source: `src/stock/`.
+
+Errors are JSON `{error, message, retryable}` with fixed text per status (never the service's body):
+`RATE_LIMITED`, `VALIDATION_ERROR`, `STOCK_TIMEOUT`, `STOCK_UNREACHABLE`, `STOCK_SERVICE_ERROR`,
+`STOCK_PROVIDERS_UNAVAILABLE`, `SERVER_MISCONFIGURED`.
+
 ## Usage analytics
 
 Each tool handler invocation records one Workers Analytics Engine data point for
