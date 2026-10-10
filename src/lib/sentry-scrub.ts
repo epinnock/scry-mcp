@@ -9,18 +9,20 @@
  * Vendored rather than shared. There is no common package across these repos.
  */
 
-/** Header names whose values must never be sent, compared case-insensitively. */
-const SENSITIVE_HEADERS = [
-  "x-api-key",
-  "authorization",
-  "cookie",
-  "x-cleanup-token",
-  "x-scry-caller",
-  "x-scry-grant-token",
-  "cf-aig-authorization",
-  "x-goog-api-key",
-  "x-vercel-protection-bypass",
-];
+/**
+ * Request headers an error report may keep. An allow-list, not a deny-list
+ * (log-core-hardening G7 / flutter-capture F44): a header nobody listed, such as the
+ * signed caller assertion, an API key or a custom X-Foo, never leaves the Worker. The
+ * request id is the join key for the log store.
+ */
+const SAFE_HEADERS = new Set([
+  "accept",
+  "content-length",
+  "content-type",
+  "host",
+  "user-agent",
+  "x-scry-request-id",
+]);
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   // Presigned URLs: keep the object path, drop the query string (a signature).
@@ -34,6 +36,13 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<redacted-jwt>"],
 ];
 
+function allowListHeaders(headers: Record<string, string>): void {
+  for (const name of Object.keys(headers)) {
+    if (!SAFE_HEADERS.has(name.toLowerCase())) delete headers[name];
+    else if (typeof headers[name] === "string") headers[name] = scrubString(headers[name]);
+  }
+}
+
 export function scrubString(value: string): string {
   return SECRET_PATTERNS.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), value);
 }
@@ -46,11 +55,7 @@ export function scrubString(value: string): string {
 export function scrubEvent(event: any): any {
   const request = event.request as { headers?: Record<string, string>; query_string?: unknown; data?: unknown; url?: string } | undefined;
 
-  if (request?.headers) {
-    for (const name of Object.keys(request.headers)) {
-      if (SENSITIVE_HEADERS.includes(name.toLowerCase())) request.headers[name] = "<redacted>";
-    }
-  }
+  if (request?.headers) allowListHeaders(request.headers);
 
   // Bodies and query strings are never needed here, and both can carry search
   // queries (customer IP) or keys.
