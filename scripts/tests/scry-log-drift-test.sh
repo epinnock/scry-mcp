@@ -1,45 +1,66 @@
 #!/usr/bin/env bash
-# Tests for scripts/scry-log-drift.sh (log-core-hardening acceptance rows 32-33). Run from anywhere:
-#   bash scripts/tests/scry-log-drift-test.sh
-# Fake stage Workers are files read through file:// URLs; the network error is a closed local port.
+# Tests for scripts/scry-log-drift.sh (log-core-hardening plan rows 32-33): ahead fails with "deploy logs-service first",
+# network error passes with a warning, plus the in-sync / behind / changed-definition / no-hash cases.
+# The stage Worker is faked with a file:// URL (curl reads <dir>/healthz; file:// has no HTTP status, so curl prints 000 there), so no network or server is needed.
+# Run from the repo root (or anywhere): scripts/tests/scry-log-drift-test.sh
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "$here/../.." && pwd)
-cd "$root" || exit 2
-check="$root/scripts/scry-log-drift.sh"
-vendored=${SCRY_LOG_DIR:-src/lib/scry-log}
+drift=$root/scripts/scry-log-drift.sh
+dir=${SCRY_LOG_DIR:-$root/src/lib/scry-log}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-pass=0; failn=0
+fail=0; n=0
+export SCRY_LOG_TS_DIR=${SCRY_LOG_TS_DIR:-$root}
+export SCRY_LOG_DRIFT_NAME=test-repo
 
-ok()  { pass=$((pass + 1)); echo "ok   - $1"; }
-bad() { failn=$((failn + 1)); echo "FAIL - $1"; [[ -n ${2:-} ]] && sed 's/^/       /' <<< "$2"; }
+vjson=$(node "$root/scripts/scry-log-schema.mjs" "$dir") || { echo "FAIL: cannot compute the vendored schema"; exit 1; }
+vhash=$(jq -r .hash <<< "$vjson"); vcount=$(jq -r .entries <<< "$vjson")
 
-vjson=$(node "$root/scripts/scry-log-schema.mjs" "$vendored") || { echo "cannot read the vendored scry-log" >&2; exit 2; }
-vhash=$(jq -r .hash <<< "$vjson"); ventries=$(jq -r .entries <<< "$vjson")
-
-# run <name> <expected rc> <expected text> <url> [env...]
+# run <name> <expected rc> <expected output substring> <healthz json | "-" for none> [dir]
 run() {
-  local name=$1 rc_want=$2 text=$3 url=$4 out rc; shift 4
-  out=$(env SCRY_LOGS_STAGE_HEALTHZ="$url" "$@" bash "$check" "$vendored" 2>&1); rc=$?
-  if [[ $rc == "$rc_want" && $out == *"$text"* ]]; then ok "$name"; else bad "$name (want rc $rc_want and \"$text\", got rc $rc)" "$out"; fi
+    local name=$1 want_rc=$2 want_out=$3 body=$4 d=${5:-$dir} out rc url
+    n=$((n + 1)); mkdir -p "$tmp/s$n"
+    if [[ $body == - ]]; then url=http://127.0.0.1:9; else printf '%s' "$body" > "$tmp/s$n/healthz"; url=file://$tmp/s$n; fi
+    out=$(SCRY_LOGS_STAGE_URL=$url "$drift" "$d" 2>&1); rc=$?
+    if [[ $rc != "$want_rc" || $out != *"$want_out"* ]]; then
+        echo "FAIL [$n] $name: rc=$rc (want $want_rc), output: $out"; fail=1
+    else echo "ok   [$n] $name"; fi
 }
-healthz() { printf '{"ok":true,"service":"scry-logs","env":"staging","commit":"%s"%s}' "${1:-91fc9e0111d03641821f53136b754b28234c3a3c}" "${2:-}" > "$tmp/hz.json"; echo "file://$tmp/hz.json"; }
 
-run "same hash passes"                 0 "OK: vendored scry-log matches" "$(healthz abc ",\"schema\":{\"version\":1,\"hash\":\"$vhash\"},\"entries\":$ventries")"
-run "vendored ahead (row 32) fails"    1 "Deploy logs-service first"     "$(healthz abc ",\"schema\":{\"version\":1,\"hash\":\"0000000000000000\"},\"entries\":$((ventries - 3))")"
-run "vendored behind warns, passes"    0 "behind the stage logs Worker"  "$(healthz abc ",\"schema\":{\"version\":1,\"hash\":\"0000000000000000\"},\"entries\":$((ventries + 2))")"
-run "same count, other hash warns"     0 "different hash"                "$(healthz abc ",\"schema\":{\"version\":1,\"hash\":\"0000000000000000\"},\"entries\":$ventries")"
-run "worker without a hash fails"      1 "predates the schema hash"      "$(healthz)"
-run "worker without a hash, warn mode" 0 "predates the schema hash"      "$(healthz)" SCRY_LOG_UNHASHED=warn
-run "network error (row 33) passes"    0 "could not read the stage logs Worker" "http://127.0.0.1:9/healthz"
-echo 'upstream connect error' > "$tmp/html.txt"
-run "non-JSON body passes with warning" 0 "could not read the stage logs Worker" "file://$tmp/html.txt"
-run "missing file passes with warning" 0 "could not read the stage logs Worker" "file://$tmp/none.json"
+hz() { printf '{"ok":true,"service":"scry-logs","env":"staging","commit":"%s","schema":{"version":1,"hash":"%s"},"entries":%s}' "$1" "$2" "$3"; }
 
-# A copy that predates the schema hash cannot be read: exit 2 (a repo problem, not a Worker outage).
-mkdir -p "$tmp/old"; cp "$vendored"/*.ts "$tmp/old/"; rm -f "$tmp/old/schema-hash.ts"
-out=$(SCRY_LOGS_STAGE_HEALTHZ="http://127.0.0.1:9/healthz" bash "$check" "$tmp/old" 2>&1); rc=$?
-if [[ $rc == 2 && $out == *"schema-hash.ts"* ]]; then ok "copy without schema-hash.ts exits 2"; else bad "copy without schema-hash.ts exits 2 (got rc $rc)" "$out"; fi
+run "in sync passes" 0 "in sync" "$(hz 1111111111 "$vhash" "$vcount")"
+run "vendored ahead (store has fewer entries) fails" 1 "Deploy logs-service first" "$(hz 1111111111 deadbeef $((vcount - 3)))"
+run "ahead names the counts" 1 "$vcount schema entries here, $((vcount - 3)) in the store" "$(hz 1111111111 deadbeef $((vcount - 3)))"
+run "vendored behind warns and passes" 0 "behind the stage log store" "$(hz 1111111111 deadbeef $((vcount + 2)))"
+run "same count, different hash warns and passes" 0 "a definition changed" "$(hz 1111111111 deadbeef "$vcount")"
+run "store without a schema hash (predates S2) fails" 1 "Deploy logs-service first" '{"ok":true,"service":"scry-logs","env":"staging","commit":"91fc9e0111d03641821f53136b754b28234c3a3c"}'
+run "network error passes with a warning" 0 "unreachable or unreadable" -
+run "garbage body passes with a warning" 0 "unreachable or unreadable" 'not json at all'
+run "missing vendored dir is a usage error" 2 "cannot read the vendored scry-log" "$(hz 1111111111 "$vhash" "$vcount")" "$tmp/nope"
 
-echo "$pass passed, $failn failed"
-[[ $failn == 0 ]]
+# An HTTP 403 (the Cloudflare bot-fight challenge a hosted runner got in F59) must pass with a warning that names the status.
+if command -v python3 >/dev/null 2>&1; then
+    port=$((20000 + RANDOM % 20000))
+    python3 -c "import http.server,sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(s): s.send_response(403); s.end_headers(); s.wfile.write(b'challenge')
+    def log_message(*a): pass
+http.server.HTTPServer(('127.0.0.1', $port), H).serve_forever()" & srv=$!
+    # Wait for the port (up to 10 s) rather than a fixed sleep: a loaded runner raced the old sleep 1 (F63).
+    for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.2; done
+    n=$((n + 1))
+    out=$(SCRY_LOGS_STAGE_URL=http://127.0.0.1:$port "$drift" "$dir" 2>&1); rc=$?
+    kill "$srv" 2>/dev/null; wait "$srv" 2>/dev/null
+    if [[ $rc == 0 && $out == *"unreachable or unreadable (HTTP 403"* ]]; then echo "ok   [$n] HTTP 403 passes with a warning naming the status"
+    else echo "FAIL [$n] HTTP 403 warning: rc=$rc, output: $out"; fail=1; fi
+fi
+
+# A vendored copy that gained an entry the store lacks: add one allowed key to a temp copy and compare against the
+# store as it was before (the real hash and count of the unmodified copy).
+cp -r "$dir" "$tmp/ahead-copy"
+sed -i "s/\(ALLOWED_KEYS[^=]*=.*'attrs'\)\]/\1, 'zz_new_field']/" "$tmp/ahead-copy/schema.ts"
+if ! grep -q zz_new_field "$tmp/ahead-copy/schema.ts"; then echo "FAIL: could not mutate the temp copy"; fail=1; fi
+run "copy with a new allowed key is ahead of the store that has the old schema" 1 "Deploy logs-service first" "$(hz 1111111111 "$vhash" "$vcount")" "$tmp/ahead-copy"
+[[ $fail == 0 ]] && echo "all $n scry-log-drift tests passed"
+exit "$fail"
