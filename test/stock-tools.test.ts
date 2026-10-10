@@ -134,6 +134,10 @@ describe("registration gate (STOCK_TOOLS_ENABLED)", () => {
       expect(t!.description).toMatch(/provider's site/);
       expect(Object.keys((t!.inputSchema as { properties: object }).properties).sort()).toEqual(["limit", "provider", "query", "type"]);
       expect((t!.inputSchema as { required?: string[] }).required).toEqual(["query"]);
+      const limitDesc = (t!.inputSchema as unknown as { properties: { limit: { description: string } } }).properties.limit.description;
+      expect(limitDesc).toMatch(/^Target number of results/);
+      expect(limitDesc).toMatch(/at least 3/);
+      expect(limitDesc).not.toMatch(/Maximum/);
       expect(t!.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     });
   });
