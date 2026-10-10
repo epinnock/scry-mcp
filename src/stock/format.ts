@@ -62,6 +62,8 @@ function clean(value: unknown, max = MAX_TEXT): string {
 }
 
 const MAX_CREDIT_PARTS = 16;
+/** Upper bound for the uncapped credit line the parts are compared with (a line longer than this is not trusted). */
+const MAX_CREDIT_LINE_FULL = 2000;
 
 /** Like clean() but keeps the single spaces at the edges, which separate one credit part from the next. */
 function cleanPart(value: unknown): string {
@@ -112,6 +114,8 @@ export function normaliseItem(raw: unknown): StockItem | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const provider = clean(r.provider, 32);
+  // The credit parts are checked against the whole line; only the plain fallback shown to the agent is capped.
+  const fullCreditLine = clean(r.creditLine, MAX_CREDIT_LINE_FULL);
   const creditLine = clean(r.creditLine);
   const pageUrl = httpsUrl(r.pageUrl);
   const previewUrl = httpsUrl(r.previewUrl);
@@ -137,7 +141,7 @@ export function normaliseItem(raw: unknown): StockItem | null {
   if (h) item.previewHeight = h;
   const licence = clean(r.licenseLabel, 80);
   if (licence) item.licenseLabel = licence;
-  const creditParts = normaliseCreditParts(r.creditParts, creditLine);
+  const creditParts = normaliseCreditParts(r.creditParts, fullCreditLine);
   if (creditParts) item.creditParts = creditParts;
   const licenseUrl = httpsUrl(r.licenseUrl);
   if (licenseUrl) item.licenseUrl = licenseUrl;

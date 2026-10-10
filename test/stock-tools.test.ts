@@ -314,14 +314,48 @@ describe("provider attribution (stock-metasearch standards)", () => {
     await withClient({}, async client => {
       const res = asResult(await search(client));
       const t = text(res);
-      expect(t).toContain('credit: "[Empty street](https://www.flickr.com/photos/12345/67890)" by [Jane Doe](https://www.flickr.com/photos/12345) is licensed under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).');
+      expect(t).toContain(
+        'credit: ["Empty street"](https://www.flickr.com/photos/12345/67890) by [Jane Doe](https://www.flickr.com/photos/12345) is licensed under [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). ' +
+          "To view a copy of this license, visit [https://creativecommons.org/licenses/by/2.0/](https://creativecommons.org/licenses/by/2.0/).",
+      );
       expect(t).toContain("| licence: [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)");
       expect(t).toContain("Includes results from [Openverse](https://openverse.org/). Made with Openverse, not endorsed or certified by Openverse.");
       expect(t).toContain("Sources: [Pixabay](https://pixabay.com/), [Unsplash](https://unsplash.com/?utm_source=scry&utm_medium=referral), [Openverse](https://openverse.org/).");
-      // Pixabay has no licence page in the contract: the plain label stays.
-      expect(t).toContain("| licence: Pixabay Content License");
+      // Pixabay and Unsplash carry a licence page in the contract: their label is a link too.
+      expect(t).toContain("| licence: [Pixabay Content License](https://pixabay.com/service/license-summary/)");
+      expect(t).toContain("| licence: [Unsplash License](https://unsplash.com/license?utm_source=scry&utm_medium=referral)");
       expect(res.structuredContent!.notices).toEqual(expect.arrayContaining([expect.stringContaining("not endorsed or certified by Openverse")]));
     });
+  });
+
+  it("a long Openverse title (credit line over 200 characters) keeps its links and the licence deed", () => {
+    const base = contract.items.find(i => i.provider === "openverse")!;
+    const title = `File:${"Some very long Wikimedia title ".repeat(4)}1987.jpg`.slice(0, 120);
+    expect(title.length).toBeGreaterThanOrEqual(113);
+    const deed = "https://creativecommons.org/licenses/by-sa/4.0/";
+    const creditParts = [
+      { text: `"${title}"`, href: "https://commons.wikimedia.org/wiki/File:Long.jpg" },
+      { text: " by " },
+      { text: "Jane Doe", href: "https://commons.wikimedia.org/wiki/User:JaneDoe" },
+      { text: " is licensed under " },
+      { text: "CC BY-SA 4.0", href: deed },
+      { text: ". To view a copy of this license, visit " },
+      { text: deed, href: deed },
+      { text: "." },
+    ];
+    const creditLine = creditParts.map(p => p.text).join("");
+    expect(creditLine.length).toBeGreaterThan(200);
+    const item = normaliseItem({ ...base, title, creator: "Jane Doe", creditLine, creditParts, licenseUrl: deed });
+    expect(item).not.toBeNull();
+    expect(item!.creditParts).toEqual(creditParts);
+    expect(item!.licenseUrl).toBe(deed);
+    // The plain fallback line stays bounded.
+    expect(item!.creditLine.length).toBeLessThanOrEqual(200);
+    const md = creditMarkdown(item!);
+    expect(md).toContain("(https://commons.wikimedia.org/wiki/File:Long.jpg)");
+    expect(md).toContain("[Jane Doe](https://commons.wikimedia.org/wiki/User:JaneDoe)");
+    expect(md).toContain(`[CC BY-SA 4.0](${deed})`);
+    expect(md).toContain(`visit [${deed}](${deed})`);
   });
 
   it("the structured output carries creditParts, licenseUrl and providerUrl exactly as the contract has them", async () => {
