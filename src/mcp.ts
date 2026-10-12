@@ -966,12 +966,15 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       return lines;
     };
 
+    // A visual row or a snip hit has no component links or tags to show (bundle/model text, never printed unquoted).
+    const hasComponentLinks = (r: SearchResultRow, meta: SearchResultMeta): boolean =>
+      !meta.visual && extractSnipHit(r as unknown as Record<string, unknown>) === undefined;
+
     const formatResultLinkLines = (r: SearchResultRow, meta: SearchResultMeta): string[] => {
       const lines: string[] = [];
-      const isSnip = extractSnipHit(r as unknown as Record<string, unknown>) !== undefined;
       // A visual row has no Figma, GitHub or Storybook link and no tags to show: those fields are
       // author-controlled text in its bundle, so they are left out rather than printed unquoted.
-      if (!meta.visual && !isSnip) {
+      if (hasComponentLinks(r, meta)) {
         if (meta.figmaUrl) lines.push(`   Figma: ${meta.figmaUrl}`);
         if (meta.githubUrl) lines.push(`   GitHub: ${meta.githubUrl}`);
         if (meta.storybookUrl) lines.push(`   Storybook: ${meta.storybookUrl}`);
@@ -1030,11 +1033,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // A visual row's author-controlled strings are escaped, bounded and one-line here too: most hosts
       // hand structuredContent to the model, so it is not a side door around the quoted text.
       const snip = extractSnipHit(r as unknown as Record<string, unknown>);
-      const visualText = meta.visual
-        ? visualStructuredText(r, { description: meta.description, visual: meta.visual })
-        : snip
-          ? snipStructuredText(r, meta.description)
-          : undefined;
+      let visualText: ReturnType<typeof visualStructuredText> | undefined;
+      if (meta.visual) visualText = visualStructuredText(r, { description: meta.description, visual: meta.visual });
+      else if (snip) visualText = snipStructuredText(r, meta.description);
       return {
         name: visualText?.name ?? (r.component_name || r.id),
         score: r.score,
