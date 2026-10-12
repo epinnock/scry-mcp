@@ -135,6 +135,22 @@ describe.each([
       const text = textOf(res);
       expect(text).toContain("captureId cap-123 · open with get_capture");
       expect(text.match(/Snip \(screen capture\)/g)).toHaveLength(1);
+      // The snip hit has exactly one snip line and no build or Versions line; the story hit keeps its build line.
+      const [, snipBlock, storyBlock] = text.split(/\n\n(?=\d+\. )/);
+      expect(snipBlock.match(/Snip \(screen capture\)/g)).toHaveLength(1);
+      expect(snipBlock).toContain('Snip (screen capture) by "Ada Lovelace" at 2026-10-11T15:04:05.000Z · captureId cap-123 · open with get_capture');
+      expect(snipBlock).not.toMatch(/build|Versions:/);
+      expect(storyBlock).toMatch(/build /);
+      expect(text).not.toMatch(/&(lt|gt|amp|quot|#\d+);/);
+    });
+  });
+
+  it("prints quotes and angle brackets as plain text, never as HTML entities", async () => {
+    stubApi([{ ...snipHit, takenBy: 'A "B" <c>' }]);
+    await withClient(async client => {
+      const text = textOf(await client.callTool({ name: tool, arguments: args }));
+      expect(text).toContain('by "A \\"B\\" \\<c\\>"');
+      expect(text).not.toMatch(/&(lt|gt|amp|quot|#\d+);/);
     });
   });
 

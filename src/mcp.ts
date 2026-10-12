@@ -970,6 +970,24 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const hasComponentLinks = (r: SearchResultRow, meta: SearchResultMeta): boolean =>
       !meta.visual && extractSnipHit(r as unknown as Record<string, unknown>) === undefined;
 
+    // Build provenance and version count of a story hit. A snip hit has no build, so it gets neither a
+    // "build unknown" line nor a version line; its snip line under the name says how to open it (feature searchable-snips).
+    const formatResultBuildLines = (r: SearchResultRow): string[] => {
+      const row = r as unknown as Record<string, unknown>;
+      if (extractSnipHit(row)) return [];
+      const provenance = extractProvenance(row);
+      const lines = [`   ${formatProvenanceLine(provenance)}`];
+      // How many indexed copies of this screen the row stands for. Absent
+      // (an API without dedup) renders nothing rather than "1".
+      const versionLine = formatVersionLine(
+        extractVersionCount(row),
+        versionsMode,
+        provenance.buildSha?.slice(0, 7) ?? provenance.buildId,
+      );
+      if (versionLine) lines.push(`   ${versionLine}`);
+      return lines;
+    };
+
     const formatResultLinkLines = (r: SearchResultRow, meta: SearchResultMeta): string[] => {
       const lines: string[] = [];
       // A visual row has no Figma, GitHub or Storybook link and no tags to show: those fields are
@@ -984,16 +1002,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // rendered, including as "build unknown · unknown": a result an agent
       // cannot date is a result it should not treat as current, and silence
       // reads as currency (roadmap-open-questions-code-answers.md B.1).
-      const provenance = extractProvenance(r as unknown as Record<string, unknown>);
-      lines.push(`   ${formatProvenanceLine(provenance)}`);
-      // How many indexed copies of this screen the row stands for. Absent
-      // (an API without dedup) renders nothing rather than "1".
-      const versionLine = formatVersionLine(
-        extractVersionCount(r as unknown as Record<string, unknown>),
-        versionsMode,
-        provenance.buildSha?.slice(0, 7) ?? provenance.buildId,
-      );
-      if (versionLine) lines.push(`   ${versionLine}`);
+      lines.push(...formatResultBuildLines(r));
       const screenshotUrl = r.screenshot_url || meta.screenshotUrl;
       if (screenshotUrl) lines.push(`   Screenshot: ${screenshotUrl}`);
       if (r.project_id) lines.push(`   Project: ${r.project_id}`);
