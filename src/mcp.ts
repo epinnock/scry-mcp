@@ -20,7 +20,7 @@ import {
   formatVersionLine,
   type VersionsMode,
 } from "./utils/version-info.js";
-import { extractSnipHit, formatSnipIdentityLines, formatSnipProvenanceLine, snipStructuredText } from "./utils/snip-hit.js";
+import { extractSnipHit, formatSnipIdentityLines, snipStructuredText } from "./utils/snip-hit.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE, STOCK_AUDIENCE } from "./utils/caller-assertion.js";
@@ -970,12 +970,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
     const hasComponentLinks = (r: SearchResultRow, meta: SearchResultMeta): boolean =>
       !meta.visual && extractSnipHit(r as unknown as Record<string, unknown>) === undefined;
 
-    // Build provenance and version count of a story hit. A snip hit has no build: it gets its own
-    // snip line and no build or version lines (feature searchable-snips).
+    // Build provenance and version count of a story hit. A snip hit has no build, so it gets neither a
+    // "build unknown" line nor a version line; its snip line under the name says how to open it (feature searchable-snips).
     const formatResultBuildLines = (r: SearchResultRow): string[] => {
       const row = r as unknown as Record<string, unknown>;
-      const snip = extractSnipHit(row);
-      if (snip) return [`   ${formatSnipProvenanceLine(snip)}`];
+      if (extractSnipHit(row)) return [];
       const provenance = extractProvenance(row);
       const lines = [`   ${formatProvenanceLine(provenance)}`];
       // How many indexed copies of this screen the row stands for. Absent
