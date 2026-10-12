@@ -51,6 +51,17 @@ export function formatSnipLine(snip: SnipHit | undefined): string | undefined {
   return `Snip (screen capture)${by}${at} · captureId ${snip.captureId} · open with get_capture`;
 }
 
+/**
+ * The line a snip hit shows where a story hit shows its build provenance: a snip has no build, so
+ * "build unknown ... no current build" would be wrong. Built only from fields already on the hit.
+ */
+export function formatSnipProvenanceLine(snip: SnipHit): string {
+  const by = snip.takenBy ? ` by "${snip.takenBy.replace(/"/g, '\\"')}"` : "";
+  const date = snip.takenAt?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  const on = date ? `, ${date}` : "";
+  return `Snip${by}${on} · open with get_capture ${snip.captureId}`;
+}
+
 const SNIP_TEXT_MAX = 400;
 
 /**
