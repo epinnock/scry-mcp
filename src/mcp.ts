@@ -20,6 +20,7 @@ import {
   formatVersionLine,
   type VersionsMode,
 } from "./utils/version-info.js";
+import { extractSnipHit, formatSnipLine } from "./utils/snip-hit.js";
 import { isPresignedUrl, presignedExpiry } from "./utils/presigned-url.js";
 import { classifySearchApiError, upstreamErrorCode } from "./utils/search-errors.js";
 import { CALLER_ASSERTION_HEADER, CallerAssertionCache, DASHBOARD_AGENT_AUDIENCE, STOCK_AUDIENCE } from "./utils/caller-assertion.js";
@@ -886,6 +887,11 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
          * search-dedup). Absent from an API that predates it.
          */
         version_count?: number;
+        /** Snip hits only (feature searchable-snips): decided by the search API; read via extractSnipHit. */
+        source?: string;
+        captureId?: string;
+        takenBy?: string;
+        takenAt?: string;
       }>;
       /** Rows folded away as older copies of a returned screen. Absent from an older API. */
       duplicates_collapsed?: number;
@@ -932,6 +938,9 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
       // author's keywords; it has no component, source path or story to show.
       if (meta.visual) return formatVisualIdentityLines(i, r, { description: meta.description, visual: meta.visual });
       const lines = [`${i + 1}. **${r.component_name || r.id}** (score: ${r.score?.toFixed(3)})`];
+      // feature searchable-snips: a screen capture shared with the caller. The API already decided access.
+      const snipLine = formatSnipLine(extractSnipHit(r as unknown as Record<string, unknown>));
+      if (snipLine) lines.push(`   ${snipLine}`);
       if (meta.description) lines.push(`   ${meta.description}`);
       else if (r.searchable_text) lines.push(`   ${r.searchable_text}`);
       // feature capture-sources: which platform this came from, when it is
@@ -1054,6 +1063,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         // Indexed copies of this screen the row stands for; absent when the
         // API did not say.
         versionCount: extractVersionCount(r as unknown as Record<string, unknown>),
+        // feature searchable-snips: source / captureId / takenBy / takenAt on snip hits only; absent otherwise.
+        ...extractSnipHit(r as unknown as Record<string, unknown>),
       };
     });
 
@@ -1161,6 +1172,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Search for UI components by text query.",
           "Uses semantic (dense) and keyword (BM25 sparse) hybrid search across the Scry component database.",
           "Returns component names, relevance scores, metadata, Figma/GitHub/Storybook links, and screenshot URLs.",
+          "Results can include snips (screen captures) shared with you; open one with get_capture.",
           "",
           "",
           "Scope — read this before searching:",
@@ -1267,6 +1279,7 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
           "Search for visually similar UI components by providing a base64-encoded image.",
           "Uses image embeddings for visual similarity matching via Jina Embeddings v4.",
           "Can be combined with a text query for hybrid (text + visual) search.",
+          "Results can include snips (screen captures) shared with you; open one with get_capture.",
           "",
           "Scope: same rules as search_components — scope 'project' (default) searches only",
           "project_id and never widens; scope 'org' also returns opted-in, readable sibling",
