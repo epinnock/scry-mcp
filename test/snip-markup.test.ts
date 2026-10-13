@@ -357,8 +357,8 @@ describe("SNIP_MARKUP in wrangler.jsonc", () => {
   };
   const config = parseJsonc(wranglerRaw) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
 
-  it("is on in staging and off in production (the top-level vars)", () => {
+  it("is on in staging and in production (the top-level vars; released by the flip PR)", () => {
     expect(config.env.staging.vars.SNIP_MARKUP).toBe("on");
-    expect(config.vars.SNIP_MARKUP).toBe("off");
+    expect(config.vars.SNIP_MARKUP).toBe("on");
   });
 });
