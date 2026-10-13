@@ -31,6 +31,8 @@ export interface CaptureToolContext {
   /** Diagnostics: fixed words, status and latency only (see the file header). */
   log: (tool: string, data: Record<string, unknown>) => void;
   fetchImpl?: typeof fetch;
+  /** snip-markup: SNIP_MARKUP is "on", so latest_capture / get_capture print and return the numbered notes. */
+  markup?: boolean;
 }
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -103,7 +105,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
       return errorResult(m.code, m.message, m.retryable, m.detail);
     }
     const image = await fetchAgentImage(typeof capture.agentUrl === "string" ? capture.agentUrl : undefined, ctx.fetchImpl ?? fetch);
-    const { text, structured } = formatCapture(capture, { imageAttached: image.ok, imageNote: image.ok ? undefined : image.reason });
+    const { text, structured } = formatCapture(capture, { imageAttached: image.ok, imageNote: image.ok ? undefined : image.reason, markup: ctx.markup === true });
     const content: Content[] = [{ type: "text", text }];
     if (image.ok) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
     return { content, structuredContent: structured };

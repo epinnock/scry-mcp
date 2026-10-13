@@ -58,6 +58,8 @@ export interface McpToolCallEvent {
   /** Size of the tool result in bytes. Never the body. */
   response_bytes: number;
   missing_capability: boolean;
+  /** snip-markup: latest_capture / get_capture only, and only while SNIP_MARKUP is on. A boolean; never a note or a count. */
+  has_markup?: boolean;
   server_build?: string;
   env: Environment;
 }
@@ -234,6 +236,23 @@ export function responseBytes(result: unknown): number {
  * Declared argument names that are present in `args` (never values), minus the analytics args the wrapper injected.
  * A tool's own `context` / `conversation_id` is a normal argument and its name is listed (F3).
  */
+const MARKUP_TOOLS: ReadonlySet<string> = new Set(["latest_capture", "get_capture"]);
+
+/**
+ * snip-markup: whether a latest_capture / get_capture result carried markup, read from the one boolean the tool puts in
+ * its structuredContent (`has_markup`, present only while SNIP_MARKUP is on). Undefined for every other tool and result.
+ * Reads a boolean only: no note text, no counts.
+ */
+export function hasMarkupOf(tool: string, result: unknown): boolean | undefined {
+  if (!MARKUP_TOOLS.has(tool)) return undefined;
+  try {
+    const flag = (result as { structuredContent?: { has_markup?: unknown } } | undefined)?.structuredContent?.has_markup;
+    return typeof flag === "boolean" ? flag : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function presentInputKeys(args: unknown, declared: ReadonlySet<string> | undefined, injected?: ReadonlySet<string>): string[] {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const keys: string[] = [];
@@ -271,6 +290,7 @@ export interface ToolCallInput extends SessionInfo {
   inputKeys?: string[];
   responseBytes?: number;
   missingCapability?: boolean;
+  hasMarkup?: boolean;
   serverBuild?: unknown;
   env?: unknown;
 }
@@ -313,6 +333,7 @@ export function buildToolCallEvent(i: ToolCallInput): McpToolCallEvent {
     input_keys: (i.inputKeys ?? []).map(k => safeId(k, MAX_LABEL)).filter((k): k is string => !!k).slice(0, MAX_KEYS),
     response_bytes: Math.max(0, Math.round(Number(i.responseBytes) || 0)),
     missing_capability: i.missingCapability === true,
+    has_markup: typeof i.hasMarkup === "boolean" ? i.hasMarkup : undefined,
     server_build: safeId(i.serverBuild, 64),
     env: schemaEnv(i.env),
   });
