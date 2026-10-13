@@ -342,6 +342,73 @@
         "note": "You belong to 56 projects; project-wide shares were read from 50 of them. Pass project_id to list the rest.",
         "publicLinksEnabled": true
       }
+    },
+    "latest_marked": {
+      "request": "GET /api/agent/captures/latest (alice), a marked snip (snip-markup)",
+      "status": 200,
+      "body": {
+        "capture": {
+          "captureId": "cap_mark1",
+          "projectId": "p1",
+          "status": "ready",
+          "capturedByUid": "alice",
+          "capturedByName": "Alice A",
+          "capturedAt": "2026-10-06T03:22:38.614Z",
+          "receivedAt": "2026-10-06T03:22:38.614Z",
+          "expiresAt": "2026-10-16T03:24:38.614Z",
+          "ageSeconds": 120,
+          "width": 1200,
+          "height": 800,
+          "bytes": 1000,
+          "scale": 2,
+          "os": "mac",
+          "mode": "region",
+          "note": "Card spacing pass for the settings page",
+          "appName": "Figma",
+          "access": "owner",
+          "sharing": {
+            "sharedWith": [
+              "bob"
+            ],
+            "sharedWithOrgIds": [],
+            "sharedWithProject": false,
+            "link": null
+          },
+          "previewUrl": "https://r2.test/p1/captures/cap_mark1/preview.jpg?X-Amz-Signature=sig",
+          "originalUrl": "https://r2.test/p1/captures/cap_mark1/original.png?X-Amz-Signature=sig",
+          "agentUrl": "https://r2.test/p1/captures/cap_mark1/agent.webp?X-Amz-Signature=sig",
+          "markup": {
+            "v": 1,
+            "notes": [
+              {
+                "n": 1,
+                "x": 436,
+                "y": 96,
+                "w": 260,
+                "h": 64,
+                "text": "header is too tall, should be 48 px"
+              },
+              {
+                "n": 2,
+                "x": 912,
+                "y": 540,
+                "text": "this button should be ink, not teal"
+              },
+              {
+                "n": 3,
+                "x": 120,
+                "y": 700,
+                "text": "missing empty state"
+              }
+            ],
+            "marks": {
+              "arrows": 1,
+              "boxes": 0,
+              "pens": 0
+            }
+          }
+        }
+      }
     }
   }
 }

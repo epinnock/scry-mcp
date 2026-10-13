@@ -40,6 +40,7 @@ import {
   buildToolCallEvent,
   presentInputKeys,
   responseBytes,
+  hasMarkupOf,
   statusOfOutcome,
   type SessionInfo,
 } from "../analytics/event";
@@ -255,6 +256,7 @@ function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: Call
   // Sizes and names only, computed now so the result object is read before anything else can touch it.
   const inputKeys = presentInputKeys(raw, meta?.declared, meta?.injected);
   const bytes = responseBytes(f.result);
+  const hasMarkup = hasMarkupOf(f.tool, f.result);
   // F3: only an argument the wrapper added (or get_more_tools' own `context`, which exists to be the intent) is read
   // as analytics input. A tool's own `context` / `conversation_id` argument is its data, never an intent.
   const context = meta && (meta.injected.has(CONTEXT_ARG) || f.tool === MISSING_CAPABILITY_TOOL) ? raw[CONTEXT_ARG] : undefined;
@@ -280,6 +282,7 @@ function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: Call
         inputKeys,
         responseBytes: bytes,
         missingCapability: f.tool === MISSING_CAPABILITY_TOOL,
+        hasMarkup,
         serverBuild: opts.serverBuild,
         env: who.env,
       }),
