@@ -23,6 +23,22 @@ export const CAPTURE_AGENT_IMAGE = {
   fetchTimeoutMs: 10_000,
 } as const;
 
+/**
+ * animated-snips: the clip limits the upload service enforces (features/animated-snips/fixtures/animation-contract.json
+ * `limits`). A capture whose `animation` is outside them is treated as a still, never printed as a clip.
+ */
+export const CAPTURE_CLIP = {
+  minDurationMs: 500,
+  maxDurationMs: 10_000,
+  maxFps: 12,
+  /** Longest side of the clip, and of the contact sheet that stands in for it as the agent picture. */
+  maxLongEdgePx: 1280,
+  /** The agent picture of a clip: 6 evenly spaced frames in a 3 x 2 grid (contactSheet in the contract). */
+  contactSheetFrames: 6,
+  contactSheetCols: 3,
+  contactSheetRows: 2,
+} as const;
+
 /** `latest_capture` refuses a capture older than this unless the caller passes maxAgeMinutes. */
 export const LATEST_DEFAULT_MAX_AGE_MINUTES = 15;
 /** The dashboard caps the window at one day. */

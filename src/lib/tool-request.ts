@@ -40,6 +40,7 @@ import {
   buildToolCallEvent,
   presentInputKeys,
   responseBytes,
+  hasAnimationOf,
   hasMarkupOf,
   statusOfOutcome,
   type SessionInfo,
@@ -257,6 +258,7 @@ function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: Call
   const inputKeys = presentInputKeys(raw, meta?.declared, meta?.injected);
   const bytes = responseBytes(f.result);
   const hasMarkup = hasMarkupOf(f.tool, f.result);
+  const hasAnimation = hasAnimationOf(f.tool, f.result);
   // F3: only an argument the wrapper added (or get_more_tools' own `context`, which exists to be the intent) is read
   // as analytics input. A tool's own `context` / `conversation_id` argument is its data, never an intent.
   const context = meta && (meta.injected.has(CONTEXT_ARG) || f.tool === MISSING_CAPABILITY_TOOL) ? raw[CONTEXT_ARG] : undefined;
@@ -283,6 +285,7 @@ function emitAnalytics(opts: ToolWrapOptions, meta: ArgMeta | undefined, f: Call
         responseBytes: bytes,
         missingCapability: f.tool === MISSING_CAPABILITY_TOOL,
         hasMarkup,
+        hasAnimation,
         serverBuild: opts.serverBuild,
         env: who.env,
       }),
