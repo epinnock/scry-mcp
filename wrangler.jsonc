@@ -40,6 +40,10 @@
     // snip-markup: "on" makes latest_capture / get_capture print the numbered notes of a marked snip. OFF in production until the
     // feature's Gate B (kill switch: any value but "on"). Stage is on.
     "SNIP_MARKUP": "on",
+    // animated-snips: "on" makes latest_capture / get_capture say a snip is a clip (the picture is a 6-frame contact sheet, plus an
+    // "Animated snip" line and a signed MP4 link) and list_captures mark clip rows. OFF in production until the feature's release
+    // (kill switch: any value but "on"). Stage is on.
+    "ANIMATED_SNIPS": "off",
     // stock-metasearch: STOCK_TOOLS_ENABLED and STOCK_SERVICE_URL are deliberately NOT set here (search_stock is
     // absent in production until the feature's Gate B).
     "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
@@ -118,6 +122,8 @@
         "CAPTURE_TOOLS_ENABLED": "1",
         // snip-markup: ON in stage (production "off" until the feature's Gate B); any value but "on" prints today's text.
         "SNIP_MARKUP": "on",
+        // animated-snips: ON in stage (production "off" until the release); any value but "on" prints today's text.
+        "ANIMATED_SNIPS": "on",
         // Stock picture search (feature stock-metasearch): search_stock calls the stage scry-stock Worker over
         // workers.dev with a signed scry-stock assertion. ON in stage only; production has NO STOCK_TOOLS_ENABLED
         // until the feature's Gate B (unset = tool absent). Secret: STOCK_SERVICE_TOKEN (wrangler secret put).

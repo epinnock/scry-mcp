@@ -1760,6 +1760,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         log: (tool, data) => (tool.includes(":") ? this.logDiagnostic(tool, data) : this.log(tool, data)),
         // snip-markup: dark until its Gate B. "on" prints the numbered notes of a marked snip; anything else is today's text.
         markup: this.env.SNIP_MARKUP === "on",
+        // animated-snips: dark until its release. "on" tells the agent a snip is a clip (contact-sheet picture, clip link); anything else is today's text.
+        animation: this.env.ANIMATED_SNIPS === "on",
       });
     }
 

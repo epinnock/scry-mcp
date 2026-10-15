@@ -146,6 +146,7 @@ export function createPostHogSink(opts: PostHogSinkOptions): AnalyticsSink | nul
             scry_response_bytes: e.response_bytes,
             scry_missing_capability: e.missing_capability,
             scry_has_markup: e.has_markup,
+            scry_has_animation: e.has_animation,
             scry_event_schema: e.schema,
             scry_env: e.env,
           },

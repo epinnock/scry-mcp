@@ -37,6 +37,8 @@ declare namespace Cloudflare {
     CAPTURE_TOOLS_ENABLED?: string;
     /** "on" makes latest_capture / get_capture print the numbered notes of a marked snip (feature snip-markup). Off by default; production off until Gate B. */
     SNIP_MARKUP?: string;
+    /** "on" makes latest_capture / get_capture say a snip is a clip and print its signed MP4 link (feature animated-snips). Off by default; production off until the release. */
+    ANIMATED_SNIPS?: string;
     /** "1" registers the search_stock tool (feature stock-metasearch). Off by default; production unset until Gate B. */
     STOCK_TOOLS_ENABLED?: string;
     /** scry-stock Worker base URL (callers use the workers.dev host). */

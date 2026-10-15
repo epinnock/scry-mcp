@@ -60,6 +60,8 @@ export interface McpToolCallEvent {
   missing_capability: boolean;
   /** snip-markup: latest_capture / get_capture only, and only while SNIP_MARKUP is on. A boolean; never a note or a count. */
   has_markup?: boolean;
+  /** animated-snips: latest_capture / get_capture only, and only while ANIMATED_SNIPS is on. A boolean; never a link, a size or a length. */
+  has_animation?: boolean;
   server_build?: string;
   env: Environment;
 }
@@ -253,6 +255,21 @@ export function hasMarkupOf(tool: string, result: unknown): boolean | undefined 
   }
 }
 
+/**
+ * animated-snips: whether a latest_capture / get_capture result was a clip, read from the one boolean the tool puts in
+ * its structuredContent (`has_animation`, present only while ANIMATED_SNIPS is on). Undefined for every other tool and result.
+ * Reads a boolean only: never the clip link, the size or the length.
+ */
+export function hasAnimationOf(tool: string, result: unknown): boolean | undefined {
+  if (!MARKUP_TOOLS.has(tool)) return undefined;
+  try {
+    const flag = (result as { structuredContent?: { has_animation?: unknown } } | undefined)?.structuredContent?.has_animation;
+    return typeof flag === "boolean" ? flag : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function presentInputKeys(args: unknown, declared: ReadonlySet<string> | undefined, injected?: ReadonlySet<string>): string[] {
   if (!args || typeof args !== "object" || Array.isArray(args)) return [];
   const keys: string[] = [];
@@ -291,6 +308,7 @@ export interface ToolCallInput extends SessionInfo {
   responseBytes?: number;
   missingCapability?: boolean;
   hasMarkup?: boolean;
+  hasAnimation?: boolean;
   serverBuild?: unknown;
   env?: unknown;
 }
@@ -334,6 +352,7 @@ export function buildToolCallEvent(i: ToolCallInput): McpToolCallEvent {
     response_bytes: Math.max(0, Math.round(Number(i.responseBytes) || 0)),
     missing_capability: i.missingCapability === true,
     has_markup: typeof i.hasMarkup === "boolean" ? i.hasMarkup : undefined,
+    has_animation: typeof i.hasAnimation === "boolean" ? i.hasAnimation : undefined,
     server_build: safeId(i.serverBuild, 64),
     env: schemaEnv(i.env),
   });
