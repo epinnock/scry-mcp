@@ -43,7 +43,7 @@
     // animated-snips: "on" makes latest_capture / get_capture say a snip is a clip (the picture is a 6-frame contact sheet, plus an
     // "Animated snip" line and a signed MP4 link) and list_captures mark clip rows. OFF in production until the feature's release
     // (kill switch: any value but "on"). Stage is on.
-    "ANIMATED_SNIPS": "off",
+    "ANIMATED_SNIPS": "on",
     // stock-metasearch: STOCK_TOOLS_ENABLED and STOCK_SERVICE_URL are deliberately NOT set here (search_stock is
     // absent in production until the feature's Gate B).
     "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
