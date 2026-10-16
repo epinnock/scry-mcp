@@ -418,9 +418,9 @@ describe("ANIMATED_SNIPS in wrangler.jsonc", () => {
   };
   const config = parseJsonc(wranglerRaw) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
 
-  it("is on in staging and off in production (the flip PR changes the top-level value at release)", () => {
+  it("is on in staging and in production (the top-level vars; released by the flip PR)", () => {
     expect(config.env.staging.vars.ANIMATED_SNIPS).toBe("on");
-    expect(config.vars.ANIMATED_SNIPS).toBe("off");
+    expect(config.vars.ANIMATED_SNIPS).toBe("on");
   });
 
   it("names the switch the contract names", () => {
