@@ -608,8 +608,8 @@ describe("SYNC_CLIPBOARD in wrangler.jsonc", () => {
   };
   const config = parseJsonc(wranglerRaw) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
 
-  it("is on in staging and off in production (the top-level vars) until the release", () => {
+  it("is on in staging and in production (the top-level vars) since the release", () => {
     expect(config.env.staging.vars.SYNC_CLIPBOARD).toBe("on");
-    expect(config.vars.SYNC_CLIPBOARD).toBe("off");
+    expect(config.vars.SYNC_CLIPBOARD).toBe("on");
   });
 });
