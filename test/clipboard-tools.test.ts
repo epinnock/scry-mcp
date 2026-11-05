@@ -290,6 +290,18 @@ describe("latest_clipboard results", () => {
     });
   });
 
+  it("snip with markup: a JPEG preview picture is attached as image/jpeg; no project_id needed", async () => {
+    const { calls } = mockWorld(() => Response.json(snip({ image: picture({ mime: "image/jpeg", url: `${IMG_HOST}captures/p/preview.jpg?X-Amz-Signature=s` }) })), { type: "image/jpeg" });
+    await withClient({}, async client => {
+      const r = asResult(await call(client));
+      expect(r.isError).toBeUndefined();
+      expect(r.content.map(c => c.type)).toEqual(["text", "image"]);
+      expect(r.content[1].mimeType).toBe("image/jpeg");
+      expect(r.structuredContent).toMatchObject({ kind: "snip", captureId: "cap_abc1", hasPicture: true });
+    });
+    expect(calls[0].url).toBe(`${DASH}/api/agent/clipboard/latest`);
+  });
+
   it("cuts the text at 100 000 characters and says so", async () => {
     const long = "a".repeat(100_000) + "TAIL" + "b".repeat(49_996);
     mockWorld(() => Response.json(copy({ text: long })));
@@ -370,6 +382,24 @@ describe("latest_clipboard errors", () => {
       expect(e.retryable).toBe(true);
       expect(JSON.stringify(e)).not.toContain("detail");
     });
+  });
+
+  it("400 invalid_project_id and 503 map through the existing capture errors", async () => {
+    const cases: Array<[() => Response, string, boolean]> = [
+      [() => Response.json({ error: "invalid_project_id" }, { status: 400 }), "INVALID_ARGUMENT", false],
+      [() => Response.json({ error: "storage_unavailable" }, { status: 503 }), "DASHBOARD_API_503", true],
+    ];
+    for (const [make, code, retryable] of cases) {
+      vi.restoreAllMocks();
+      mockWorld(make);
+      await withClient({}, async client => {
+        const r = await call(client, { project_id: "proj1" });
+        expect(r.isError).toBe(true);
+        const e = errorOf(r);
+        expect(e.error).toBe(code);
+        expect(e.retryable).toBe(retryable);
+      });
+    }
   });
 
   it("a 200 without an item field is a bad shape, not an empty clipboard", async () => {

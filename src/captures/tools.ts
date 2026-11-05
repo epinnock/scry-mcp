@@ -164,7 +164,7 @@ export function registerCaptureTools(server: McpServer, ctx: CaptureToolContext)
         "Errors (JSON {error, message, retryable}): CLIPBOARD_OFF (clipboard sharing is not on for this account; do not retry), RATE_LIMITED, SERVER_MISCONFIGURED, DASHBOARD_UNREACHABLE, TIMEOUT.",
       ].join(" "),
       inputSchema: {
-        project_id: PROJECT_ID.optional().describe("Scry project id, only when the user names a project: the newest snip is then taken from that project. Copies are not per project."),
+        project_id: PROJECT_ID.optional().describe("Scry project id, only when the user names a project: the newest snip is then taken from that project. Without it, the newest own snip across all projects is used (never ambiguous). Copies are not per project."),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
