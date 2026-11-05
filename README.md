@@ -86,8 +86,9 @@ The Sync app produces the rendition; this server does no image processing.
 404 while the caller's `sync-clipboard` switch is off (`CLIPBOARD_OFF`, "Clipboard sharing is not on for your
 account.") and reads nothing else. The result is a text block (one-line summary, then the content labelled as
 untrusted data from the user's clipboard: text, else HTML, else RTF, cut at 100 000 characters), then the picture
-inline when it is at most 3.5 MB, else a line with its signed link (valid 5 minutes). A snip item names its capture
-id for `get_capture`. An empty clipboard is a normal result; a dashboard 429 is `RATE_LIMITED`.
+inline only up to the capture tools' budget (`CAPTURE_AGENT_IMAGE.inlineMaxBytes`, 75,000 bytes), else a line
+with its signed link (valid 5 minutes); a snip over the budget also says `get_capture` returns its agent picture. A
+snip item names its capture id for `get_capture`. An empty clipboard is a normal result; a dashboard 429 is `RATE_LIMITED`.
 
 Errors are JSON `{error, message, retryable}` with `isError`: `CAPTURE_STALE` (newest is older than
 the window; carries its id and age), `AMBIGUOUS_PROJECT` (the message lists the projects),

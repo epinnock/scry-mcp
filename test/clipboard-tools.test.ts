@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { jwtVerify } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CAPTURE_AGENT_IMAGE } from "../src/captures/constants";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { DASHBOARD_AGENT_AUDIENCE } from "../src/utils/caller-assertion";
 
@@ -21,7 +22,8 @@ const AGENT_SECRET = "test-agent-assertion-secret";
 const DASH = "https://dashboard.example.test";
 const IMG_HOST = "https://r2.test/";
 const PIC_URL = `${IMG_HOST}clipboard/u/c1.png?X-Amz-Signature=clipsig`;
-const MAX_INLINE = 3_500_000;
+/** The capture tools' inline budget (Claude Code's 25k-token tool-output cap), shared, never a copy of the number. */
+const MAX_INLINE = CAPTURE_AGENT_IMAGE.inlineMaxBytes;
 const TOOL = "latest_clipboard";
 
 class TestScryMCP extends ScryMCP {
@@ -229,19 +231,20 @@ describe("latest_clipboard results", () => {
     });
   });
 
-  it("picture over 3.5 MB (by the route's byte count): never fetched, the link line instead", async () => {
+  it("picture over the inline budget (by the route's byte count): never fetched, the link line instead", async () => {
     const { pictureCalls } = mockWorld(() => Response.json(copy({ image: picture({ bytes: MAX_INLINE + 1 }) })));
     await withClient({}, async client => {
       const r = asResult(await call(client));
       expect(r.isError).toBeUndefined();
       expect(r.content.map(c => c.type)).toEqual(["text"]);
       expect(r.content[0].text).toContain(`Picture: 640 x 480 px, too big to attach; open ${PIC_URL} (valid 5 min)`);
+      expect(r.content[0].text).not.toContain("get_capture");
       expect(r.structuredContent).toMatchObject({ hasPicture: true });
     });
     expect(pictureCalls).toHaveLength(0);
   });
 
-  it("picture over 3.5 MB by content-length or by the body itself: the link line", async () => {
+  it("picture over the inline budget by content-length or by the body itself: the link line", async () => {
     for (const spec of [{ declared: MAX_INLINE + 1 }, { bytes: MAX_INLINE + 10 }]) {
       vi.restoreAllMocks();
       mockWorld(() => Response.json(copy({ image: picture() })), spec);
@@ -300,6 +303,32 @@ describe("latest_clipboard results", () => {
       expect(r.structuredContent).toMatchObject({ kind: "snip", captureId: "cap_abc1", hasPicture: true });
     });
     expect(calls[0].url).toBe(`${DASH}/api/agent/clipboard/latest`);
+  });
+
+  it("snip picture over the inline budget: the link line, and get_capture returns its agent picture", async () => {
+    for (const spec of [{ route: MAX_INLINE + 1 }, { body: MAX_INLINE + 10 }]) {
+      vi.restoreAllMocks();
+      const pic = spec.route === undefined ? picture({ mime: "image/webp" }) : picture({ mime: "image/webp", bytes: spec.route });
+      mockWorld(() => Response.json(snip({ image: pic })), { type: "image/webp", bytes: spec.body });
+      await withClient({}, async client => {
+        const r = asResult(await call(client));
+        expect(r.isError).toBeUndefined();
+        expect(r.content.map(c => c.type)).toEqual(["text"]);
+        expect(r.content[0].text).toContain(
+          `Picture: 640 x 480 px, too big to attach; open ${PIC_URL} (valid 5 min). Call get_capture with capture_id cap_abc1: it returns the snip's agent picture`,
+        );
+        expect(r.structuredContent).toMatchObject({ kind: "snip", captureId: "cap_abc1", hasPicture: true });
+      });
+    }
+  });
+
+  it("a picture exactly at the inline budget is attached", async () => {
+    mockWorld(() => Response.json(copy({ image: picture({ bytes: MAX_INLINE }) })), { bytes: MAX_INLINE, declared: MAX_INLINE });
+    await withClient({}, async client => {
+      const r = asResult(await call(client));
+      expect(r.content.map(c => c.type)).toEqual(["text", "image"]);
+      expect(r.content[0].text).toContain("Picture: 640 x 480 px, attached below.");
+    });
   });
 
   it("cuts the text at 100 000 characters and says so", async () => {
