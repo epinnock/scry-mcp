@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CAPTURE_AGENT_IMAGE } from "../src/captures/constants";
 import { ScryMCP, type AuthProps } from "../src/mcp";
 import { DASHBOARD_AGENT_AUDIENCE } from "../src/utils/caller-assertion";
+import wranglerRaw from "../wrangler.jsonc?raw";
 
 declare module "cloudflare:test" {
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Workers pool environment augmentation.
@@ -44,6 +45,7 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
       SCRY_AGENT_ASSERTION_SECRET: AGENT_SECRET,
       MCP_USAGE: undefined,
       CAPTURE_TOOLS_ENABLED: "1",
+      SYNC_CLIPBOARD: "on",
       SCRY_DASHBOARD_API_URL: DASH,
       SCRY_DASHBOARD_BYPASS_TOKEN: "bypass-123",
       ...overrides,
@@ -122,6 +124,33 @@ describe("latest_clipboard registration", () => {
     });
     await withClient({ CAPTURE_TOOLS_ENABLED: undefined }, async client => {
       expect((await client.listTools()).tools.map(t => t.name)).not.toContain(TOOL);
+    });
+  });
+
+  it("SYNC_CLIPBOARD off, unset or any value but \"on\": not listed, a call is an unknown tool, and the dashboard is never called", async () => {
+    for (const flag of ["off", undefined, "", "1", "ON", "true"]) {
+      vi.restoreAllMocks();
+      const { calls } = mockWorld(() => Response.json(copy({ text: COPY_TEXT })));
+      await withClient({ SYNC_CLIPBOARD: flag }, async client => {
+        const names = (await client.listTools()).tools.map(t => t.name);
+        expect(names).not.toContain(TOOL);
+        expect(names).toContain("latest_capture");
+        const outcome = await call(client).then(
+          r => ({ isError: asResult(r).isError, text: text(r) }),
+          (e: unknown) => ({ isError: true, text: String(e) }),
+        );
+        expect(outcome.isError).toBe(true);
+        expect(outcome.text).toMatch(/not found|unknown tool/i);
+      });
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("SYNC_CLIPBOARD=on (with CAPTURE_TOOLS_ENABLED): listed next to the capture tools", async () => {
+    await withClient({ SYNC_CLIPBOARD: "on" }, async client => {
+      const names = (await client.listTools()).tools.map(t => t.name);
+      expect(names).toContain(TOOL);
+      expect(names).toContain("latest_capture");
     });
   });
 
@@ -569,5 +598,18 @@ describe("latest_clipboard privacy (G3)", () => {
       await call(client);
     });
     expect(points).toEqual([{ blobs: [TOOL, "staging", "agent-user-1"], doubles: [1], indexes: ["agent-user-1"] }]);
+  });
+});
+
+describe("SYNC_CLIPBOARD in wrangler.jsonc", () => {
+  const parseJsonc = (raw: string): unknown => {
+    const stripped = raw.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (_m, str: string | undefined) => str ?? "");
+    return JSON.parse(stripped.replace(/,(\s*[}\]])/g, "$1"));
+  };
+  const config = parseJsonc(wranglerRaw) as { vars: Record<string, string>; env: { staging: { vars: Record<string, string> } } };
+
+  it("is on in staging and off in production (the top-level vars) until the release", () => {
+    expect(config.env.staging.vars.SYNC_CLIPBOARD).toBe("on");
+    expect(config.vars.SYNC_CLIPBOARD).toBe("off");
   });
 });

@@ -82,7 +82,7 @@ The Sync app produces the rendition; this server does no image processing.
 | `delete_capture` | Permanently delete a capture the caller took (owner only) |
 | `latest_clipboard` | `/sc`: the newest item on the caller's shared clipboard from Scry Sync (a Scry Copy or the newest snip, whichever is newer). Optional `project_id` picks the snip's project |
 
-`latest_clipboard` (feature mcp-clipboard) calls the dashboard's `GET /api/agent/clipboard/latest`, which answers
+`latest_clipboard` (feature mcp-clipboard) is registered only when `SYNC_CLIPBOARD="on"` as well (stage on, production `"off"` until the release; off or unset, the tool is not listed). It calls the dashboard's `GET /api/agent/clipboard/latest`, which answers
 404 while the caller's `sync-clipboard` switch is off (`CLIPBOARD_OFF`, "Clipboard sharing is not on for your
 account.") and reads nothing else. The result is a text block (one-line summary, then the content labelled as
 untrusted data from the user's clipboard: text, else HTML, else RTF, cut at 60 000 characters, or 8 000 when a
