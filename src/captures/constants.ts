@@ -24,6 +24,20 @@ export const CAPTURE_AGENT_IMAGE = {
 } as const;
 
 /**
+ * mcp-clipboard (latest_clipboard): where the clipboard text is cut. Claude Code caps one tool result at
+ * 25,000 tokens and counts the text and an inline picture's base64 together. Text runs about 3 to 4
+ * characters a token (code and non-Latin text fewer), so 60 000 characters alone stays under the cap. An
+ * inline picture can use up to `CAPTURE_AGENT_IMAGE.inlineMaxBytes` (about 100k base64 characters) of it
+ * by itself, so with a picture attached only 8 000 characters go with it.
+ */
+export const CLIPBOARD_TEXT = {
+  /** Longest text printed when no picture is attached inline. */
+  maxChars: 60_000,
+  /** Longest text printed when a picture is also attached inline. */
+  maxCharsWithPicture: 8_000,
+} as const;
+
+/**
  * animated-snips: the clip limits the upload service enforces (features/animated-snips/fixtures/animation-contract.json
  * `limits`). A capture whose `animation` is outside them is treated as a still, never printed as a clip.
  */

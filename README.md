@@ -80,6 +80,17 @@ The Sync app produces the rendition; this server does no image processing.
 | `get_capture` | One capture by id (own, or shared with the caller) |
 | `list_captures` | Text list, newest first. `scope` `mine` (default) or `shared`, `project_id`, `limit` (max 50), `before`. Surfaces `projectsTruncated` and its note when the unscoped shared list hit the 50-project cap |
 | `delete_capture` | Permanently delete a capture the caller took (owner only) |
+| `latest_clipboard` | `/sc`: the newest item on the caller's shared clipboard from Scry Sync (a Scry Copy or the newest snip, whichever is newer). Optional `project_id` picks the snip's project |
+
+`latest_clipboard` (feature mcp-clipboard) is registered only when `SYNC_CLIPBOARD="on"` as well (stage on, production `"off"` until the release; off or unset, the tool is not listed). It calls the dashboard's `GET /api/agent/clipboard/latest`, which answers
+404 while the caller's `sync-clipboard` switch is off (`CLIPBOARD_OFF`, "Clipboard sharing is not on for your
+account.") and reads nothing else. The result is a text block (one-line summary, then the content labelled as
+untrusted data from the user's clipboard: text, else HTML, else RTF, cut at 60 000 characters, or 8 000 when a
+picture is attached, so the whole result stays under Claude Code's 25k-token tool-output cap: `CLIPBOARD_TEXT` in
+`src/captures/constants.ts`), then the picture (PNG, JPEG, WebP or GIF; any other type, an SVG say, is link-only;
+redirects are not followed) inline only up to the capture tools' budget (`CAPTURE_AGENT_IMAGE.inlineMaxBytes`, 75,000 bytes), else a line
+with its signed link (valid 5 minutes); a snip over the budget also says `get_capture` returns its agent picture. A
+snip item names its capture id for `get_capture`. An empty clipboard is a normal result; a dashboard 429 is `RATE_LIMITED`.
 
 Errors are JSON `{error, message, retryable}` with `isError`: `CAPTURE_STALE` (newest is older than
 the window; carries its id and age), `AMBIGUOUS_PROJECT` (the message lists the projects),

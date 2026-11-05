@@ -150,6 +150,13 @@ export class DashboardAgentClient {
   captureDelete(captureId: string, q: { project_id?: string } = {}): Promise<ApiResult> {
     return this.request("DELETE", `/api/agent/captures/${encodeURIComponent(captureId)}${queryString(q)}`);
   }
+
+  // --- Shared clipboard (feature mcp-clipboard): /api/agent/clipboard/latest ---
+  // The dashboard checks the sync-clipboard switch first (404 when off) and reads only the caller's own data.
+
+  clipboardLatest(q: { project_id?: string } = {}): Promise<ApiResult> {
+    return this.request("GET", `/api/agent/clipboard/latest${queryString(q)}`);
+  }
 }
 
 function queryString(q: Record<string, string | number | undefined>): string {

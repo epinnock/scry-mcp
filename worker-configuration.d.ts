@@ -39,6 +39,8 @@ declare namespace Cloudflare {
     SNIP_MARKUP?: string;
     /** "on" makes latest_capture / get_capture say a snip is a clip and print its signed MP4 link (feature animated-snips). Off by default; production off until the release. */
     ANIMATED_SNIPS?: string;
+    /** "on" registers latest_clipboard (feature mcp-clipboard, the /sc skill), on top of CAPTURE_TOOLS_ENABLED. Off by default; production off until the release. */
+    SYNC_CLIPBOARD?: string;
     /** "1" registers the search_stock tool (feature stock-metasearch). Off by default; production unset until Gate B. */
     STOCK_TOOLS_ENABLED?: string;
     /** scry-stock Worker base URL (callers use the workers.dev host). */

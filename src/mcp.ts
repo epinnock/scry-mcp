@@ -1762,6 +1762,8 @@ export class ScryMCP extends McpAgent<Env, unknown, AuthProps> {
         markup: this.env.SNIP_MARKUP === "on",
         // animated-snips: dark until its release. "on" tells the agent a snip is a clip (contact-sheet picture, clip link); anything else is today's text.
         animation: this.env.ANIMATED_SNIPS === "on",
+        // mcp-clipboard: dark until its release. "on" registers latest_clipboard; anything else leaves it unlisted (unknown tool).
+        clipboard: this.env.SYNC_CLIPBOARD === "on",
       });
     }
 
