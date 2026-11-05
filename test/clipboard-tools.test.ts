@@ -64,18 +64,22 @@ async function withClient(overrides: Partial<Env>, test: (client: Client) => Pro
 }
 
 type Captured = { method: string; url: string; headers: Headers };
-type PictureSpec = { bytes?: number; type?: string; status?: number; declared?: number };
+type PictureSpec = { bytes?: number; type?: string; status?: number; declared?: number; location?: string; throws?: boolean };
 
 /** Mocks the dashboard (handler) and the signed picture host. */
 function mockWorld(handler: (c: Captured) => Response, picture: PictureSpec = {}) {
   const calls: Captured[] = [];
   const pictureCalls: string[] = [];
+  const pictureInits: Array<RequestInit | undefined> = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     if (url.startsWith(IMG_HOST)) {
       pictureCalls.push(url);
+      pictureInits.push(init);
+      if (picture.throws) throw new TypeError("network down");
       const headers: Record<string, string> = { "content-type": picture.type ?? "image/png" };
       if (picture.declared !== undefined) headers["content-length"] = String(picture.declared);
+      if (picture.location !== undefined) headers.location = picture.location;
       return new Response(new Uint8Array(picture.bytes ?? 64).fill(7), { status: picture.status ?? 200, headers });
     }
     if (!url.startsWith(DASH)) throw new Error(`Unexpected test fetch: ${url}`);
@@ -83,7 +87,7 @@ function mockWorld(handler: (c: Captured) => Response, picture: PictureSpec = {}
     calls.push(c);
     return handler(c);
   });
-  return { calls, pictureCalls };
+  return { calls, pictureCalls, pictureInits };
 }
 
 type R = { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; isError?: boolean; structuredContent?: Record<string, unknown> };
@@ -331,18 +335,103 @@ describe("latest_clipboard results", () => {
     });
   });
 
-  it("cuts the text at 100 000 characters and says so", async () => {
-    const long = "a".repeat(100_000) + "TAIL" + "b".repeat(49_996);
+  it("cuts the text at 60 000 characters and says so", async () => {
+    const long = "a".repeat(60_000) + "TAIL" + "b".repeat(89_996);
     mockWorld(() => Response.json(copy({ text: long })));
     await withClient({}, async client => {
       const r = asResult(await call(client));
       const t = r.content[0].text!;
-      expect(t).toContain("(cut at 100 000 characters of 150 000)");
-      expect(t).toContain("a".repeat(100_000));
+      expect(t).toContain("(cut at 60 000 characters of 150 000)");
+      expect(t).toContain("a".repeat(60_000));
       expect(t).not.toContain("TAIL");
-      expect(t.length).toBeLessThan(100_000 + 1_000);
+      expect(t.length).toBeLessThan(60_000 + 1_000);
       expect(r.structuredContent).toMatchObject({ chars: 150_000 });
     });
+  });
+
+  it("text of exactly 60 000 characters is not cut", async () => {
+    mockWorld(() => Response.json(copy({ text: "c".repeat(60_000) })));
+    await withClient({}, async client => {
+      const t = asResult(await call(client)).content[0].text!;
+      expect(t).toContain("(60 000 characters)");
+      expect(t).not.toContain("cut at");
+    });
+  });
+
+  it("with a picture attached inline the text is cut at 8 000 characters, so text and picture fit the client's cap", async () => {
+    const long = "d".repeat(8_000) + "TAIL" + "e".repeat(11_996);
+    mockWorld(() => Response.json(copy({ text: long, image: picture({ bytes: 2000 }) })), { bytes: 2000 });
+    await withClient({}, async client => {
+      const r = asResult(await call(client));
+      expect(r.content.map(c => c.type)).toEqual(["text", "image"]);
+      const t = r.content[0].text!;
+      expect(t).toContain("(cut at 8 000 characters of 20 000)");
+      expect(t).toContain("d".repeat(8_000));
+      expect(t).not.toContain("TAIL");
+      expect(t.length).toBeLessThan(8_000 + 1_000);
+      expect(r.structuredContent).toMatchObject({ chars: 20_000, hasPicture: true });
+    });
+  });
+
+  it("a picture that is only a link (too big) leaves the text cap at 60 000", async () => {
+    mockWorld(() => Response.json(copy({ text: "f".repeat(20_000), image: picture({ bytes: MAX_INLINE + 1 }) })));
+    await withClient({}, async client => {
+      const r = asResult(await call(client));
+      expect(r.content.map(c => c.type)).toEqual(["text"]);
+      expect(r.content[0].text).toContain("(20 000 characters)");
+      expect(r.content[0].text).toContain("f".repeat(20_000));
+    });
+  });
+
+  it("the tool description gives both text cuts", async () => {
+    await withClient({}, async client => {
+      const d = (await client.listTools()).tools.find(t => t.name === TOOL)!.description!;
+      expect(d).toContain("60000 characters, or 8000 when the picture is attached");
+    });
+  });
+
+  it("the picture fetch never follows a redirect: a redirect answer or a thrown fetch is the link line", async () => {
+    const { pictureInits } = mockWorld(() => Response.json(copy({ image: picture() })));
+    await withClient({}, async client => {
+      expect(asResult(await call(client)).content.map(c => c.type)).toEqual(["text", "image"]);
+    });
+    expect(pictureInits[0]?.redirect).toBe("manual");
+    for (const spec of [
+      { status: 302, location: "https://elsewhere.test/p.png" },
+      { status: 301, location: `${IMG_HOST}other.png` },
+      { throws: true },
+    ]) {
+      vi.restoreAllMocks();
+      mockWorld(() => Response.json(copy({ image: picture() })), spec);
+      await withClient({}, async client => {
+        const r = asResult(await call(client));
+        expect(r.isError).toBeUndefined();
+        expect(r.content.map(c => c.type)).toEqual(["text"]);
+        expect(r.content[0].text).toContain(`could not be attached; open ${PIC_URL} (valid 5 min)`);
+      });
+    }
+  });
+
+  it("only PNG, JPEG, WebP and GIF are attached inline; an SVG or any other type is the link line", async () => {
+    for (const type of ["image/png", "image/jpeg", "image/webp", "image/gif"]) {
+      vi.restoreAllMocks();
+      mockWorld(() => Response.json(copy({ image: picture({ mime: type }) })), { type });
+      await withClient({}, async client => {
+        const r = asResult(await call(client));
+        expect(r.content.map(c => c.type)).toEqual(["text", "image"]);
+        expect(r.content[1].mimeType).toBe(type);
+      });
+    }
+    for (const type of ["image/svg+xml", "image/bmp", "image/tiff", "image/x-icon"]) {
+      vi.restoreAllMocks();
+      mockWorld(() => Response.json(copy({ image: picture({ mime: type }) })), { type });
+      await withClient({}, async client => {
+        const r = asResult(await call(client));
+        expect(r.isError).toBeUndefined();
+        expect(r.content.map(c => c.type)).toEqual(["text"]);
+        expect(r.content[0].text).toContain(`could not be attached; open ${PIC_URL} (valid 5 min)`);
+      });
+    }
   });
 
   it("empty clipboard: a normal result that tells the user how to fill it", async () => {

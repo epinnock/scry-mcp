@@ -4,22 +4,23 @@
  * returns it (a Scry Copy or the newest snip, whichever is newer: exactly what Scry Paste would paste).
  *
  * Result contract (plan.md "MCP result"): one text block first (the one-line summary, then the content
- * labelled as untrusted data from the user's clipboard, `text` else `html` else `rtf`, cut at 100 000
- * characters), then the picture as an image block when it fits the capture tools' inline budget
+ * labelled as untrusted data from the user's clipboard, `text` else `html` else `rtf`, cut at 60 000
+ * characters, or 8 000 when a picture is attached inline: CLIPBOARD_TEXT), then the picture as an image block when it fits the capture tools' inline budget
  * (CAPTURE_AGENT_IMAGE.inlineMaxBytes, set by Claude Code's 25k-token tool-output cap), else a line with the
  * signed link; a snip over the budget also points at get_capture, which returns its agent picture.
  * `structuredContent` is `{kind, ageMs, captureId?, hasPicture, chars}`.
  *
  * Privacy (G3): nothing here logs. Clipboard content, ids and signed links exist only in the tool result.
  */
-import { CAPTURE_AGENT_IMAGE } from "./constants";
+import { CAPTURE_AGENT_IMAGE, CLIPBOARD_TEXT } from "./constants";
 import { humanAge, mapCaptureError, type ToolErrorShape } from "./format";
 
 type Json = Record<string, unknown>;
 
 export const CLIPBOARD = {
-  /** Longest content printed; the rest is cut with a note. */
-  maxChars: 100_000,
+  /** Longest content printed (fewer with an inline picture); the rest is cut with a note. */
+  maxChars: CLIPBOARD_TEXT.maxChars,
+  maxCharsWithPicture: CLIPBOARD_TEXT.maxCharsWithPicture,
   /** Largest picture attached inline: the capture tools' budget, so the base64 fits the client's tool-output cap. */
   inlineMaxBytes: CAPTURE_AGENT_IMAGE.inlineMaxBytes,
   /** Give up fetching the picture after this long; a missing picture is never an error. */
@@ -67,6 +68,9 @@ export interface ClipboardPicture {
   mime?: string;
 }
 
+/** Only raster types a client renders are attached inline; anything else (an SVG, say) is the link line. */
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
 export type PictureFetch =
   | { ok: true; data: string; mimeType: string }
   | { ok: false; reason: "too_big" | "unavailable" | "no_link" };
@@ -80,15 +84,18 @@ export function parsePicture(v: unknown): ClipboardPicture | null {
 /**
  * Fetch the signed picture with a timeout and a hard size cap (the declared size, the content-length and
  * the bytes actually read are each checked, so a large body is never read past the cap). Never throws.
+ * Redirects are not followed: workerd rejects `redirect: "error"` outright, so the fetch is `manual` and
+ * any redirect answer counts as unavailable (the link line), as does a thrown fetch.
  */
 export async function fetchClipboardPicture(picture: ClipboardPicture, fetchImpl: typeof fetch): Promise<PictureFetch> {
   if (!picture.url) return { ok: false, reason: "no_link" };
   const cap = CLIPBOARD.inlineMaxBytes;
   if (picture.bytes !== undefined && picture.bytes > cap) return { ok: false, reason: "too_big" };
   try {
-    const res = await fetchImpl(picture.url, { signal: AbortSignal.timeout(CLIPBOARD.fetchTimeoutMs) });
+    const res = await fetchImpl(picture.url, { redirect: "manual", signal: AbortSignal.timeout(CLIPBOARD.fetchTimeoutMs) });
     const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (!res.ok || !type.startsWith("image/")) {
+    const redirected = res.redirected || (res.status >= 300 && res.status < 400);
+    if (redirected || !res.ok || !INLINE_IMAGE_TYPES.has(type)) {
       await res.body?.cancel().catch(() => undefined);
       return { ok: false, reason: "unavailable" };
     }
@@ -174,17 +181,15 @@ function summaryLine(kind: "copy" | "snip", captureId: string | undefined, body:
   return `Your clipboard: ${what} from a Scry Copy${when}.`;
 }
 
-/** The content between two tagged lines, cut at CLIPBOARD.maxChars with the plan's note. */
-function contentLines(body: Body, tag: string): string[] {
+/** The content between two tagged lines, cut at `max` characters with the plan's note. */
+function contentLines(body: Body, tag: string, max: number): string[] {
   const total = body.value.length;
-  const cut = total > CLIPBOARD.maxChars;
-  const size = cut
-    ? `(cut at ${spacedNumber(CLIPBOARD.maxChars)} characters of ${spacedNumber(total)})`
-    : `(${spacedNumber(total)} characters)`;
+  const cut = total > max;
+  const size = cut ? `(cut at ${spacedNumber(max)} characters of ${spacedNumber(total)})` : `(${spacedNumber(total)} characters)`;
   return [
     `Content, ${body.format} ${size}, between the two [${tag}] lines:`,
     `--- start of clipboard content [${tag}] ---`,
-    cut ? body.value.slice(0, CLIPBOARD.maxChars) : body.value,
+    cut ? body.value.slice(0, max) : body.value,
     `--- end of clipboard content [${tag}] ---`,
   ];
 }
@@ -207,7 +212,8 @@ export function formatClipboard(item: Json, picture: PictureFetch | null, opts: 
   ];
   if (kind === "snip") lines.push(`Snip ${captureId ?? "(id unknown)"} - call get_capture for its notes.`);
   if (pic) lines.push(pictureLine(pic, picture, kind === "snip" ? captureId : undefined));
-  if (body) lines.push(...contentLines(body, opts.tag ?? randomTag()));
+  const max = picture?.ok ? CLIPBOARD.maxCharsWithPicture : CLIPBOARD.maxChars;
+  if (body) lines.push(...contentLines(body, opts.tag ?? randomTag(), max));
 
   const structured: Json = { kind, ageMs: ageMs ?? null };
   if (kind === "snip") structured.captureId = captureId ?? null;
