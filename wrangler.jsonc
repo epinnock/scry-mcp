@@ -44,9 +44,10 @@
     // "Animated snip" line and a signed MP4 link) and list_captures mark clip rows. OFF in production until the feature's release
     // (kill switch: any value but "on"). Stage is on.
     "ANIMATED_SNIPS": "on",
-    // mcp-clipboard: "on" registers latest_clipboard (the /sc skill: the caller's shared Scry Sync clipboard). OFF in production
-    // until the feature's release (kill switch: any value but "on"; off or unset, the tool is not listed). Stage is on.
-    "SYNC_CLIPBOARD": "off",
+    // mcp-clipboard: "on" registers latest_clipboard (the /sc skill: the caller's shared Scry Sync clipboard). ON in production
+    // since the release; the dashboard's sync-clipboard switch still decides whose clipboard is served (staff first).
+    // Kill switch: any value but "on" (off or unset, the tool is not listed). Stage is on.
+    "SYNC_CLIPBOARD": "on",
     // stock-metasearch: STOCK_TOOLS_ENABLED and STOCK_SERVICE_URL are deliberately NOT set here (search_stock is
     // absent in production until the feature's Gate B).
     "SCRY_DASHBOARD_API_URL": "https://dashboard.scrymore.com"
